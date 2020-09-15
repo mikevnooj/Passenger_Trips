@@ -2,6 +2,8 @@ library(dplyr)
 library(timeDate)
 library(data.table)
 library(lubridate)
+library(stringr)
+library(ggplot2)
 
 
 # we need stop boardings by station, and also need wheelchair users for each of the following:
@@ -71,6 +73,10 @@ VMH_Raw <- tbl(
   collect() %>%
   setDT()
 
+fwrite(VMH_Raw,"data//VMH_Raw.csv")
+
+VMH_Raw <- fread("data//VMH_Raw.csv")
+
 #grab dimstop
 con2 <- DBI::dbConnect(odbc::odbc(), Driver = "SQL Server", Server = "AVAILDWHP01VW", 
                        Database = "DW_IndyGo", 
@@ -122,9 +128,69 @@ VMH_joined[
                              ,TRUE ~ weekdays(Transit_Day)) 
 ]
 
+#clean VMH
+
+VMH_joined_daily <- VMH_joined[
+  ,.(
+    Boardings = sum(Boards)
+    , Alightings = sum(Alights)
+  )
+  ,.(Transit_Day,Vehicle_ID)
+  ]
+
+VMH_joined_zero <- VMH_joined_daily[Boardings == 0 | Alightings == 0]
+
+#remove zero board or alight veh
+VMH_no_zero <- VMH_joined[!VMH_joined_zero,on = c(Transit_Day = "Transit_Day",Vehicle_ID = "Vehicle_ID")]
+
+VMH_joined_zero
+
+#graph for obvious outliers
+VMH_joined_daily[!VMH_joined_zero,on = c(Transit_Day = "Transit_Day",Vehicle_ID = "Vehicle_ID")] %>%
+  ggplot(aes(x=Boardings)) +
+  geom_histogram(binwidth = 1) +
+  stat_bin(binwidth = 1, geom = "text", aes(label = ..x..), vjust = -1.5)
+
+obvious_outlier <- 1250
+
+outlier_apc_vehicles <- VMH_joined_daily[Boardings > obvious_outlier]
+
+#get vehicles < 3 SD from mean
+
+#get 3 sd from mean
+
+#remove outliers, then also vehicles that are three deeves AND have Boardings/alightings diff of greater than 5%
+three_deeves <- VMH_no_zero[
+  ,.(
+    sum(Boards)
+    ,sum(Alights)
+  )
+  ,.(Transit_Day,Vehicle_ID)
+  ][,sd(V1)*3]+
+VMH_no_zero[
+  ,.(
+    sum(Boards)
+    ,sum(Alights)
+  )
+  ,.(Transit_Day,Vehicle_ID)
+][,mean(V1)]
+
+VMH_joined_daily[
+  ,`:=`(
+    pct_diff = (Boardings - Alightings)/((Boardings + Alightings)/2) 
+  )
+]
+
+#get deeve and big pct
+VMH_three_deeves_big_pct <- VMH_joined_daily[(Boardings > three_deeves & pct_diff > 0.1) |
+                                               (Boardings > three_deeves & pct_diff < -0.1)]
+
+VMH_clean <- VMH_no_zero[!VMH_three_deeves_big_pct, on = c(Transit_Day = "Transit_Day",Vehicle_ID = "Vehicle_ID")]
+
+
 
 #match all the stops together
-VMH_joined[
+VMH_output <- VMH_clean[
   ,StopDesc_trimmed := fifelse(
    str_detect(StopDesc,"CTC")
    ,str_sub(StopDesc,1,end = str_length(StopDesc)-2)
@@ -139,13 +205,13 @@ VMH_joined[
 ][
   ,StopDesc_trimmed := fifelse(
     StopDesc_trimmed %ilike% "Meado|Oxf"
-    ,"Meadows Station"
+    ,"Future Meadows Station"
     ,StopDesc_trimmed
   )
 ][
   ,StopDesc_trimmed := fifelse(
     StopDesc_trimmed %ilike% "Key"
-    ,"Keystone Station"
+    ,"Future Keystone Station"
     ,StopDesc_trimmed
   )
 ][
@@ -169,8 +235,10 @@ VMH_joined[
   ,.(StopDesc_trimmed,Service_Type)
 ][StopDesc_trimmed %ilike% "Verm|State|9th|IU|18|22|Fall|34|38|Mea|Key"]
 
+
+
 #now get wheelchair counts
-start <- ymd(VMH_StartTime)
+start <- ymd("20200601")
 end <- ymd(VMH_EndTime)
 
 DimRoute_raw <- tbl(con2, "DimRoute") %>% collect()
@@ -187,6 +255,99 @@ FactFare_raw <- tbl(con2, "FactFare") %>%
   collect() %>%
   setDT()
 
+FactFare_raw <- fread("data//wheelchair.csv")
+
 FactFare_dates <- calendar_dates[FactFare_raw, on = c(DateKey = "DateKey")]
 
+#do transit day
+FactFare_raw[
+  #prepare date and time
+  , `:=` (
+    #Hour = str_sub(ServiceDateTime,12,19)
+    Hour = format(ServiceDateTime, "%H")
+    ,Date = str_sub(ServiceDateTime,1,10)
+  )
+][
+  #label prev day or current
+  , DateTest := ifelse(Hour<"3",1,0)
+][
+  , Transit_Day := fifelse(
+    DateTest ==1
+    ,as_date(Date)-1
+    ,as_date(Date)
+    )#end fifelse
+][
+  ,Transit_Day := as_date("1970-01-01")+days(Transit_Day)
+]
 
+FactFare_raw[
+  ,Service_Type := fcase(
+    Transit_Day %in% as_date(holidays_saturday@Data), "Saturday"
+    ,Transit_Day %in% as_date(holidays_sunday@Data), "Sunday"
+    ,weekdays(Transit_Day) %in% c("Monday","Tuesday","Wednesday","Thursday","Friday"), "Weekday"
+    ,weekdays(Transit_Day) == "Saturday", "Saturday"
+    ,weekdays(Transit_Day) == "Sunday", "Sunday"
+  )#end fcase 
+]
+
+FactFare_raw_no_zero_joined <- DimStop[FactFare_raw[FareCount > 0], on = c(StopKey = "StopKey")]
+
+
+FactFare_output <- FactFare_raw_no_zero_joined[
+  ,StopDesc_trimmed := fifelse(
+    str_detect(StopDesc,"CTC")
+    ,str_sub(StopDesc,1,end = str_length(StopDesc)-2)
+    ,str_sub(StopDesc,1,end = str_length(StopDesc)-3)
+  )
+][
+  ,StopDesc_trimmed := fifelse(
+    StopDesc_trimmed == "66th Stat"
+    ,"66th Station"
+    ,StopDesc_trimmed
+    )
+][
+  ,StopDesc_trimmed := fifelse(
+    StopDesc_trimmed %ilike% "Meado|Oxf"
+    ,"Future Meadows Station"
+    ,StopDesc_trimmed
+    )
+][
+  ,StopDesc_trimmed := fifelse(
+    StopDesc_trimmed %ilike% "Key"
+    ,"Future Keystone Station"
+    ,StopDesc_trimmed
+    )
+][
+  , .(
+    Daily_Wheelchair_Users = sum(FareCount)
+    )
+  ,.(StopDesc_trimmed
+     ,Service_Type,Transit_Day)
+][
+  #filter for time frame and for service type
+  Transit_Day >= ymd(VMH_StartTime) & 
+    Transit_Day <= ymd(VMH_EndTime) &
+    Service_Type == "Weekday"
+][
+  #get avg boardings
+  ,.(
+    Average_Daily_Wheelchair_Users = round(mean(Daily_Wheelchair_Users))
+    )
+  ,.(StopDesc_trimmed,Service_Type)
+][StopDesc_trimmed %ilike% "(Verm|State|9th|IU|18|22|Fall|34|38|Mea|Key).*ion$"]
+
+
+joined_output <- FactFare_output[
+  VMH_output,
+  on = c(StopDesc_trimmed = "StopDesc_trimmed",
+         Service_Type = "Service_Type")
+][
+  ,.(
+   Stop_Name = StopDesc_trimmed
+   ,Average_Daily_Boardings
+   ,Average_Daily_Alightings
+   ,Average_Daily_Wheelchair_Users
+  )
+]
+
+fwrite(joined_output,"data\\BrioMetrix_output.csv")
