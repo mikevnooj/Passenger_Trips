@@ -92,6 +92,9 @@
 # 2020/09/15
 # aaron wants to know highest ridership day from jan 19ish to march
 
+# 2020/10/01
+# mr. roth wants monthly total wheelchair users, by route, excluding route 90
+
 
 ### --- Libraries --- ###
 
@@ -7517,4 +7520,141 @@ FactFare_TC %>%
   
   VMH_clean[Route == 90,.(Boardings = sum(Boards)),Transit_Day][order(Boardings,decreasing = T)]
 
+
+# 2020/10/01 Roth  --------------------------------------------------------
+  library(dplyr)
+  library(timeDate)
+  library(data.table)
+  library(lubridate)
+  library(stringr)
+  library(ggplot2)
+  
+  con_DW <- DBI::dbConnect(odbc::odbc(), Driver = "SQL Server", 
+                           Server = "AVAILDWHP01VW", Database = "DW_IndyGo", Port = 1433)
+  
+  #now get wheelchair counts
+  start <- ymd("20200601")
+  end <- ymd(Sys.Date())
+  
+  DimRoute <- tbl(con_DW, "DimRoute") %>% 
+    collect() %>% 
+    data.table(key = "RouteKey")
+  
+  DimStop <- tbl(con_DW,"DimStop") %>% 
+    collect() %>% 
+    data.table(key = "StopKey")
+  
+  calendar_dates <- tbl(con_DW,"DimDate") %>% 
+    filter(CalendarDate >= start
+           ,CalendarDate <= end) %>%
+    collect() %>%
+    data.table(key = "DateKey")
+  
+  FactFare_raw <- tbl(con_DW, "FactFare") %>%
+    filter(DateKey %in% !!calendar_dates$DateKey,FareKey == 1005) %>%
+    collect() %>%
+    data.table()
+  
+  FactFare_dates_no_zero <- calendar_dates[FactFare_raw[FareCount > 0], on = c(DateKey = "DateKey")]
+  
+    #do transit day and service type
+  #get holidays
+  #set the holy days
+  holidays_sunday_service <- c("USNewYearsDay", "USMemorialDay",
+                               "USIndependenceDay", "USLaborDay",
+                               "USThanksgivingDay", "USChristmasDay")
+  
+  holidays_saturday_service <- c("USMLKingsBirthday")
+  
+  #set sat sun
+  holidays_sunday <- holiday(2000:2020, holidays_sunday_service)
+  holidays_saturday <- holiday(2000:2020, holidays_saturday_service)
+  
+  
+  FactFare_dates_no_zero[
+    #prepare date and time
+    , `:=` (
+      #Hour = str_sub(ServiceDateTime,12,19)
+      Hour = format(ServiceDateTime, "%H")
+      ,Date = str_sub(ServiceDateTime,1,10)
+    )
+    ][
+      #label prev day or current
+      , DateTest := ifelse(Hour<"3",1,0)
+      ][
+        , Transit_Day := fifelse(
+          DateTest ==1
+          ,as_date(Date)-1
+          ,as_date(Date)
+        )#end fifelse
+        ][
+          ,Transit_Day := as_date("1970-01-01")+days(Transit_Day)
+          ]
+  
+  FactFare_dates_no_zero[
+    ,Service_Type := fcase(
+      Transit_Day %in% as_date(holidays_saturday@Data), "Saturday"
+      ,Transit_Day %in% as_date(holidays_sunday@Data), "Sunday"
+      ,weekdays(Transit_Day) %in% c("Monday","Tuesday","Wednesday","Thursday","Friday"), "Weekday"
+      ,weekdays(Transit_Day) == "Saturday", "Saturday"
+      ,weekdays(Transit_Day) == "Sunday", "Sunday"
+    )#end fcase 
+    ]
+  
+  FactFare_dates_no_zero_joined <- DimStop[FactFare_dates_no_zero, on = c(StopKey = "StopKey")][
+    DimRoute
+    ,on = "RouteKey"
+    ,names(DimRoute) := mget(paste0("i.",names(DimRoute)))
+  ]
+  
+  FactFare_output <- 1
+  
+  
+  FactFare_dates_no_zero_joined[
+    Service_Type == "Weekday" & RouteReportLabel != 90
+  ][
+    , .(
+      Total_Wheelchair_Users = sum(FareCount)
+      )
+    ,.(Route = RouteReportLabel,Month = month(Transit_Day))
+  ][
+    order(Month,Route)
+  ][
+    Route != "Deadhead"
+  ][
+    ,Month := month.name[Month]
+  ] %>%
+    gt::gt()
+  
+  FactFare_dates_no_zero_joined[
+    Service_Type == "Weekday" & RouteReportLabel != 90
+    ][
+      , .(
+        Total_Wheelchair_Users = sum(FareCount)
+      )
+      ,.(Route = RouteReportLabel,Transit_Day)
+      ][
+        order(Transit_Day,Route)
+        ][
+          Route != "Deadhead"
+          ] %>%
+    gt::gt()
+  
+
+FactFare_dates_no_zero_joined[Transit_Day >= "2020-09-01",.N*FareCount,FareCount]
+
+
+  
+   ][
+              #filter for time frame and for service type
+              Transit_Day >= ymd(VMH_StartTime) & 
+                Transit_Day <= ymd(VMH_EndTime) &
+                Service_Type == "Weekday"
+              ][
+                #get avg boardings
+                ,.(
+                  Average_Daily_Wheelchair_Users = round(mean(Daily_Wheelchair_Users))
+                )
+                ,.(StopDesc_trimmed,Service_Type)
+                ][StopDesc_trimmed %ilike% "(Verm|State|9th|IU|18|22|Fall|34|38|Mea|Key).*ion$"]
   
