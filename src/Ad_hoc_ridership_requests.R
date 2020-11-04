@@ -8,7 +8,7 @@
 
 ### --- Notes --- ###
 
-### --- Revision History --- ###
+#### --- Revision History --- ####
 
 # 9/23/19 - Request from AD: BYD ridership over 9/21/19 and 9/22/19 (not just route 90).
 #         - AD also wants ridership by bus and block.
@@ -97,6 +97,16 @@
 
 # 2020/10/06
 # aaron wants to know apc count by day by vehicle for June 2020
+
+# 2020/10/19
+# Aletra wants red line ridership by hour for each month Feb thru Sept
+
+# 2020/10/29
+# Service Planning would like a new Average Daily Boarding and Alighting dataset for 2020
+# two sets, pre-cov and post-cov
+# Jan - March 14th is pre
+# June - October 1 is post
+
 
 ### --- Libraries --- ###
 
@@ -722,7 +732,7 @@ DimFare_sample <- tbl(con2, "DimFare") %>% # remove APC, test records
   filter(!FareKey %in% c(1001, 1002, 1003, 1004, 1005, 1008, 1010, 1029)) %>%
   collect()
 
-DimRoute_90 <- tbl(con2, "DimRoute") %>% 
+DimRoute_90 <- tbl(con2, "DimRoute") %>%
   filter(RouteReportLabel == "90") %>%
   collect()
 
@@ -4244,6 +4254,7 @@ sort(unique(Apc_Justin_Stops$MDCID))
 
 library(tidyverse)
 library(lubridate)
+library(timeDate)
 
 con <- DBI::dbConnect(odbc::odbc(), Driver = "SQL Server", Server = "REPSQLP01VW", 
                       Database = "Steve_Temp", Port = 1433)
@@ -6729,6 +6740,8 @@ DimStop_TC <- tbl(con2, "DimStop") %>%
   filter(StopID %in% c(52263, 52264, 52265, 52266, 52302, 52303, 52304)) %>%
   collect()
 
+library(leaflet)
+
 DimStop_TC %>%
 leaflet() %>%
 addCircles() %>%
@@ -6927,7 +6940,7 @@ FactFare_TC %>%
   DimStop <- DimStop_raw %>%
     filter(is.na(DeleteDate), !is.na(Latitude), ActiveInd == 1)  
   
-  DimStop_raw[StopReportLabel %like% "66"] %>%
+
   
   #join to VMH
   VMH_joined <- DimStop[VMH_Raw, on = c(StopID = "Stop_Id")]
@@ -7828,8 +7841,284 @@ FactFare_TC %>%
   # 7:  2020-06-30       1977       242
   # 8:  2020-06-30       1899       203
   
+
+
+# 2020/10/19 Aletra -------------------------------------------------------
+library(dplyr)
+library(timeDate)
+library(data.table)
+library(lubridate)
+library(stringr)
+library(ggplot2)
+library(leaflet)
+#first we'll get passenger trips from VMH
+con <- DBI::dbConnect(odbc::odbc(), Driver = "SQL Server", Server = "REPSQLP01VW", 
+                      Database = "TransitAuthority_IndyGo_Reporting", 
+                      Port = 1433)
+
+VMH_StartTime <- "20200201"
+VMH_EndTime <- "20200930"
+
+#grab 90 and 901/902 just in case
+#and also get stops
+VMH_Raw <- tbl(
+  con,
+  sql(
+    paste0(
+      "select Vehicle_ID
+      ,a.Time
+      ,Route
+      ,Trip
+      ,Route_Name
+      ,Boards
+      ,Alights
+      ,Stop_Id
+      ,Latitude
+      ,Longitude
+      ,GPSStatus
+      from avl.Vehicle_Message_History a (nolock)
+      left join avl.Vehicle_Avl_History b
+      on a.Avl_History_Id = b.Avl_History_Id
+      where a.Route like '90%'
+      and a.Time > '",VMH_StartTime,"'
+      and a.Time < DATEADD(day,1,'",VMH_EndTime,"')
+      and (Boards > 0 OR Alights > 0)
+      and Stop_Id <> 0
+      "
+    )#end paste
+  )#endsql
+) %>% #end paste0
+  collect() %>%
+  setDT()
+
+fwrite(VMH_Raw,"data//VMH_Raw.csv")
+
+VMH_Raw <- fread("data//VMH_Raw.csv")
+
+
+#do Transit_Day and Service Type
+#get holidays
+#set the holy days
+holidays_sunday_service <- c("USNewYearsDay", "USMemorialDay",
+                             "USIndependenceDay", "USLaborDay",
+                             "USThanksgivingDay", "USChristmasDay")
+
+holidays_saturday_service <- c("USMLKingsBirthday")
+
+#set sat sun
+holidays_sunday <- holiday(2000:2020, holidays_sunday_service)
+holidays_saturday <- holiday(2000:2020, holidays_saturday_service)
+#set service type column
+
+VMH_Raw[
+  #prepare date and time
+  , c("ClockTime","Date") := list(as.ITime(str_sub(Time, 12, 19)),as.IDate(str_sub(Time, 1, 10)))
+  ][
+    #label prev day or current
+    , DateTest := ifelse(ClockTime<"03:00:00",1,0)
+    ][
+      , Transit_Day := fifelse(
+        DateTest ==1
+        ,as_date(Date)-1
+        ,as_date(Date)
+      )#end fifelse
+      ][
+        ,Transit_Day := as_date("1970-01-01")+days(Transit_Day)
+        ][
+          ,Service_Type := case_when(Transit_Day %in% as_date(holidays_saturday@Data) ~ "Saturday"
+                                     ,Transit_Day %in% as_date(holidays_sunday@Data) ~ "Sunday"
+                                     ,weekdays(Transit_Day) %in% c("Monday","Tuesday","Wednesday","Thursday","Friday")~"Weekday"
+                                     ,TRUE ~ weekdays(Transit_Day)) 
+          ]
+
+
+#clean VMH
+
+VMH_joined_daily <- VMH_Raw[
+  ,.(
+    Boardings = sum(Boards)
+    , Alightings = sum(Alights)
+  )
+  ,.(Transit_Day,Vehicle_ID)
+  ]
+
+
+
+VMH_joined_zero <- VMH_joined_daily[Boardings == 0 | Alightings == 0]
+
+#remove zero board or alight veh
+VMH_no_zero <- VMH_Raw[!VMH_joined_zero,on = c(Transit_Day = "Transit_Day",Vehicle_ID = "Vehicle_ID")]
+
+
+#graph for obvious outliers
+VMH_joined_daily[!VMH_joined_zero,on = c(Transit_Day = "Transit_Day",Vehicle_ID = "Vehicle_ID")][Boardings > 300] %>%
+  ggplot(aes(x=Boardings)) +
+  geom_histogram(binwidth = 1) +
+  stat_bin(binwidth = 1, geom = "text", aes(label = ..x..), vjust = -1.5)
+
+obvious_outlier <- 500
+
+outlier_apc_vehicles <- VMH_joined_daily[Boardings > obvious_outlier]
+
+
+#get vehicles < 3 SD from mean
+#get 3 sd from mean
+#remove outliers, then also vehicles that are three deeves AND have Boardings/alightings diff of greater than 5%
+three_deeves <- VMH_no_zero[!outlier_apc_vehicles,on = c("Transit_Day","Vehicle_ID")
+                            ][
+                              ,.(
+                                sum(Boards)
+                                ,sum(Alights)
+                              )
+                              ,.(Transit_Day,Vehicle_ID)
+                              ][
+                                ,sd(V1)*3]+
+  VMH_no_zero[!outlier_apc_vehicles,on = c("Transit_Day","Vehicle_ID")
+              ][,.(
+                sum(Boards)
+                ,sum(Alights)
+              )
+              ,.(Transit_Day,Vehicle_ID)
+              ][,mean(V1)]
+
+VMH_joined_daily[
+  ,`:=`(
+    pct_diff = (Boardings - Alightings)/((Boardings + Alightings)/2) 
+  )
+  ]
+
+#get deeve and big pct
+VMH_three_deeves_big_pct <- VMH_joined_daily[(Boardings > three_deeves & pct_diff > 0.1) |
+                                               (Boardings > three_deeves & pct_diff < -0.1)]
+
+
+
+VMH_clean <- VMH_no_zero[
   
-  
-  
-  
-  
+  #remove three deeves
+  !VMH_three_deeves_big_pct, on = c(Transit_Day = "Transit_Day",Vehicle_ID = "Vehicle_ID")
+][
+  #remove outliers
+  !outlier_apc_vehicles, on = c("Transit_Day","Vehicle_ID")
+][
+  #remove 1899 on 2020-06-30
+  Vehicle_ID != 1899
+][
+  #remove this vehicle this day as well
+  !VMH_joined_daily[Vehicle_ID==1992 & Transit_Day == "2020-06-06"]
+  , on = c("Transit_Day","Vehicle_ID")
+][
+  #get red line set
+  Latitude > 39.709468 & Latitude < 39.877512
+][
+  #take out garage
+  Longitude > -86.173321
+]
+
+
+summary <- VMH_clean[
+  #get hourly boardings by day
+  ,.(
+    Boards = sum(Boards)
+    ,Alight = sum(Alights)
+  )
+  #group by hour, day, service_type
+  ,.(
+    hour(Time)
+    ,Transit_Day
+    ,Service_Type
+  )
+  ][
+    order(month(Transit_Day),hour)      
+    ,.(Average_Boardings = round(mean(Boards)))
+    ,.(
+      hour = hour
+      ,month = month(Transit_Day)
+      ,Service_Type
+    )
+    ]
+
+Aletra_Hourly_Summary <- dcast(summary,month + hour ~ Service_Type,fill = 0)[
+  ,month := month.abb[month]
+][
+  ,hour := paste0(hour,":00")
+][]
+
+
+
+
+fwrite(Aletra_Hourly_Summary,"data//Aletra_Hourly_Summary.csv")  
+
+
+# 2020/10/29
+
+# 2020/10/29 Service Planning Station Activity ----------------------------
+library(dplyr)
+library(timeDate)
+library(data.table)
+library(lubridate)
+library(stringr)
+library(ggplot2)
+
+
+# we need stop boardings by station, and also need wheelchair users for each of the following:
+# Statehouse, Vermont, 9th, IU Health, 18th, 22nd, Fall Creek, 34th, 38th on route 90
+# 38th and Keystone and 38th and Meadows and 38th and Oxford on any other route
+
+#looks like 38th and keystone are 10084 and 10172 and meadows is 10081, while oxford is 10175
+
+#first we'll get passenger trips from VMH
+con_rep <- DBI::dbConnect(odbc::odbc(), Driver = "SQL Server", Server = "REPSQLP01VW", 
+                      Database = "TransitAuthority_IndyGo_Reporting", 
+                      Port = 1433)
+
+VMH_StartTime <- "20200101"
+VMH_EndTime <- "20200314"
+
+
+#grab 90 and 901/902 just in case
+#and also get stops
+VMH_Raw <- tbl(
+  con_rep,
+  sql(
+    paste0(
+      "select Vehicle_ID
+      ,a.Time
+      ,Route
+      ,Trip
+      ,Route_Name
+      ,Boards
+      ,Alights
+      ,Stop_Id
+      ,Latitude
+      ,Longitude
+      ,GPSStatus
+      from avl.Vehicle_Message_History a (nolock)
+      left join avl.Vehicle_Avl_History b
+      on a.Avl_History_Id = b.Avl_History_Id
+      and a.Time > '",VMH_StartTime,"'
+      and a.Time < DATEADD(day,1,'",VMH_EndTime,"')
+      and (Boards > 0 OR Alights > 0)
+      and Stop_Id <> 0"
+    )#end paste
+  )#endsql
+) %>% #end paste0
+  collect() %>%
+  setDT()
+
+fwrite(VMH_Raw,"data//VMH_Raw.csv")
+
+VMH_Raw <- fread("data//VMH_Raw.csv")
+
+#grab dimstop
+con2 <- DBI::dbConnect(odbc::odbc(), Driver = "SQL Server", Server = "AVAILDWHP01VW", 
+                       Database = "DW_IndyGo", 
+                       Port = 1433)
+
+DimStop_raw <- tbl(con2, "DimStop") %>%
+  collect() %>%
+  setDT()
+
+
+DimStop <- DimStop_raw %>%
+  filter(is.na(DeleteDate), !is.na(Latitude), ActiveInd == 1)  
