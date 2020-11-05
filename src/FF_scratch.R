@@ -26,6 +26,11 @@ DimDate_full <- tbl(con_DW, "DimDate") %>%
   collect() %>% 
   setDT(key = "DateKey")
 
+# get stops
+DimStop <- tbl(con_DW,"DimStop") %>% 
+  collect() %>% 
+  setDT(key = "StopKey")
+
 # get timekey
 
 DimTime <- tbl(con_DW, "DimTime") %>% 
@@ -142,26 +147,28 @@ FF_clean <- FF_no_zero[
 
 
 
-FF_summary <- 
-#get by hour, day, service_type, then by month
+FF_summary <- 1
+#get by day, service type, month
 DimServiceLevel[
   DimDate_full[
     ,.(DateKey,CalendarDate)
+  ][
+    FF_clean[
+      ,sum(FareCount)
+      ,.(FareReportLabel,DateKey,Time24Hour,ServiceLevelKey)
     ][
-      FF_clean[
-        ,sum(FareCount)
-        ,.(FareReportLabel,DateKey,Time24Hour,ServiceLevelKey)
-        ][
-          ,dcast(
-            .SD
-            ,DateKey + Time24Hour + ServiceLevelKey ~ FareReportLabel
-            ,fill = 0
-          )
-          ]
+      ,dcast(
+        .SD
+        ,DateKey + Time24Hour + ServiceLevelKey ~ FareReportLabel
+        ,fill = 0
+      )
+      ]
       ,on = "DateKey"
       ]
   , on = "ServiceLevelKey"
-][
+]
+
+[
   order(month(CalendarDate))
   ,.(Average_Boardings = round(mean(Boarding)))
   ,.(
