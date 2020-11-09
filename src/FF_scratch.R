@@ -1,5 +1,6 @@
-# 6/26/20 - Thomas Coon wants to know average daily ridership and ADR by hour for each of
-#           the following stops: 52263; 52264; 52265; 52266; 52302; 52303; 52304
+# 6/26/20 - station activity for service planning
+#two date ranges, Jan - MArch 14th
+#june - Oct 1
 library(data.table)
 library(dplyr)
 library(ggplot2)
@@ -17,10 +18,16 @@ DimServiceLevel <- tbl(con_DW,"DimServiceLevel") %>%
   collect() %>% 
   data.table(key = "ServiceLevelKey")
 
-DimDate <- tbl(con_DW, "DimDate") %>%
-  filter(CalendarDateChar == "02/01/2020") %>%
+DimDate_start_pre_cov <- tbl(con_DW, "DimDate") %>%
+  filter(CalendarDateChar == "01/01/2020") %>%
   collect() %>% 
   setDT(key = "DateKey")
+
+DimDate_end_pre_cov <- tbl(con_DW, "DimDate") %>%
+  filter(CalendarDateChar == "03/14/2020") %>%
+  collect() %>% 
+  setDT(key = "DateKey")
+
 
 DimDate_full <- tbl(con_DW, "DimDate") %>%
   collect() %>% 
@@ -30,13 +37,7 @@ DimDate_full <- tbl(con_DW, "DimDate") %>%
 DimStop <- tbl(con_DW,"DimStop") %>% 
   collect() %>% 
   setDT(key = "StopKey")
-
-# get timekey
-
-DimTime <- tbl(con_DW, "DimTime") %>% 
-  collect() %>% 
-  setDT(key = "TimeKey")
-
+  
 # get farekey
 
 DimFare <- tbl(con_DW, "DimFare") %>%
@@ -45,7 +46,7 @@ DimFare <- tbl(con_DW, "DimFare") %>%
 
 # get Routes
 DimRoute <- tbl(con_DW,"DimRoute") %>%
-  filter(RouteReportLabel %like% "90") %>%
+  filter() %>%
   collect() %>% 
   setDT(key = "RouteKey")
 
@@ -54,30 +55,65 @@ DimRoute <- tbl(con_DW,"DimRoute") %>%
 FactFare <- tbl(con_DW, "FactFare") %>%
   filter(
     FareKey %in% c(1001, 1002),
-    DateKey >= local(DimDate$DateKey),
-    RouteKey %in% local(DimRoute$RouteKey)
+    DateKey >= local(DimDate_start_pre_cov$DateKey),
+    DateKey <= local(DimDate_end_pre_cov$DateKey)
   ) %>% #end filter
   collect() %>% 
   setDT()
 
 ### transformations ###
 
-FF_joined <- DimDate[
-  DimTime[
-    DimFare[
-      DimRoute[
+
+DimRoute[
+  DimStop[
+    DimDate_full[
+      DimFare[
         FactFare
-        , on = "RouteKey"
-        ]
-      , on = "FareKey"
+        ,on = "FareKey"
       ]
-    , on = "TimeKey"
+      ,on = "DateKey"
     ]
-  , on = "DateKey"
-] 
+    ,on = "StopKey"
+  ]
+  ,on = "RouteKey"
+]
+
+FactFare[
+  DimRoute
+  ,on = "RouteKey"
+  ,names(DimRoute) := mget(paste0("i.",names(DimRoute)))
+][
+  DimStop
+  ,on = "StopKey"
+  ,names(DimStop) := mget(paste0("i.",names(DimStop)))
+][
+  DimDate_full
+  ,on = "DateKey"
+  ,names(DimDate_full) := mget(paste0("i.",names(DimDate_full)))
+][DimFare
+  ,on = "FareKey"
+  ,names(DimFare) := mget(paste0("i.",names(DimDate_full)))
+]
+
+
+
+# FF_joined <- DimStop[
+#   DimDate_full[
+#     
+#       DimFare[
+#         DimRoute[
+#           FactFare
+#           , on = "RouteKey"
+#           ]
+#         , on = "FareKey"
+#         ]
+#     , on = "DateKey"
+#     ]
+#   , on = "StopKey"
+# ]
 
 #get daily by vehicle
-FF_joined_daily <- FF_joined[
+FF_joined_daily <- FactFare[
   ,sum(FareCount)
   ,.(FareReportLabel,DateKey,VehicleKey)
 ][
@@ -87,6 +123,8 @@ FF_joined_daily <- FF_joined[
     ,fill = 0
   )
 ]
+
+FactFare[] %>% head() %>% View()
 
 #get zero days
 FF_joined_zero <- FF_joined_daily[Boarding == 0 | Alighting == 0]
@@ -145,7 +183,11 @@ FF_clean <- FF_no_zero[
   !FF_three_deeves_big_pct, on = c("DateKey","VehicleKey")
 ]
 
-
+#join stops
+DimStop[
+  FF_clean
+  ,on = "StopKey"
+]
 
 FF_summary <- 1
 #get by day, service type, month
