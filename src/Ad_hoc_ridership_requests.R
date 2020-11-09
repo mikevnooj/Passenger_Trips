@@ -8061,13 +8061,6 @@ library(stringr)
 library(ggplot2)
 
 
-# we need stop boardings by station, and also need wheelchair users for each of the following:
-# Statehouse, Vermont, 9th, IU Health, 18th, 22nd, Fall Creek, 34th, 38th on route 90
-# 38th and Keystone and 38th and Meadows and 38th and Oxford on any other route
-
-#looks like 38th and keystone are 10084 and 10172 and meadows is 10081, while oxford is 10175
-
-#first we'll get passenger trips from VMH
 con_rep <- DBI::dbConnect(odbc::odbc(), Driver = "SQL Server", Server = "REPSQLP01VW", 
                       Database = "TransitAuthority_IndyGo_Reporting", 
                       Port = 1433)

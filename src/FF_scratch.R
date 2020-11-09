@@ -56,15 +56,15 @@ FactFare <- tbl(con_DW, "FactFare") %>%
   filter(
     FareKey %in% c(1001, 1002),
     DateKey >= local(DimDate_start_pre_cov$DateKey),
-    DateKey <= local(DimDate_end_pre_cov$DateKey)
+    DateKey <= local(DimDate_end_pre_cov$DateKey),
+    FareCount > 0
   ) %>% #end filter
   collect() %>% 
   setDT()
 
 ### transformations ###
 
-
-DimRoute[
+FactFare <- DimRoute[
   DimStop[
     DimDate_full[
       DimFare[
@@ -78,22 +78,22 @@ DimRoute[
   ,on = "RouteKey"
 ]
 
-FactFare[
-  DimRoute
-  ,on = "RouteKey"
-  ,names(DimRoute) := mget(paste0("i.",names(DimRoute)))
-][
-  DimStop
-  ,on = "StopKey"
-  ,names(DimStop) := mget(paste0("i.",names(DimStop)))
-][
-  DimDate_full
-  ,on = "DateKey"
-  ,names(DimDate_full) := mget(paste0("i.",names(DimDate_full)))
-][DimFare
-  ,on = "FareKey"
-  ,names(DimFare) := mget(paste0("i.",names(DimDate_full)))
-]
+# FactFare[
+#   DimRoute
+#   ,on = "RouteKey"
+#   ,names(DimRoute) := mget(paste0("i.",names(DimRoute)))
+# ][
+#   DimStop
+#   ,on = "StopKey"
+#   ,names(DimStop) := mget(paste0("i.",names(DimStop)))
+# ][
+#   DimDate_full
+#   ,on = "DateKey"
+#   ,names(DimDate_full) := mget(paste0("i.",names(DimDate_full)))
+# ][DimFare
+#   ,on = "FareKey"
+#   ,names(DimFare) := mget(paste0("i.",names(DimDate_full)))
+# ]
 
 
 
@@ -124,13 +124,12 @@ FF_joined_daily <- FactFare[
   )
 ]
 
-FactFare[] %>% head() %>% View()
 
 #get zero days
 FF_joined_zero <- FF_joined_daily[Boarding == 0 | Alighting == 0]
 
 #remove them
-FF_no_zero <- FF_joined[!FF_joined_zero,on = c(DateKey = "DateKey",VehicleKey = "VehicleKey")]
+FF_no_zero <- FactFare[!FF_joined_zero,on = c(DateKey = "DateKey",VehicleKey = "VehicleKey")]
 
 #graph it and check
 FF_joined_daily[!FF_joined_zero,on = c(DateKey = "DateKey",VehicleKey = "VehicleKey")] %>%
@@ -183,11 +182,14 @@ FF_clean <- FF_no_zero[
   !FF_three_deeves_big_pct, on = c("DateKey","VehicleKey")
 ]
 
-#join stops
-DimStop[
-  FF_clean
-  ,on = "StopKey"
+
+#get daily sums by stop
+DailyStop <- FF_clean[
+  ,sum(FareCount)
+  ,.(FareReportLabel,DateKey,StopID,StopKey)
 ]
+
+
 
 FF_summary <- 1
 #get by day, service type, month
