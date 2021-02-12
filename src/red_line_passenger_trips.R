@@ -1,5 +1,7 @@
 # Red Line Conversion to DT
 
+#Feb 9 is when the switch happened and 901/902 had their own trips
+
 library(data.table)
 library(leaflet)
 library(dplyr)
@@ -330,6 +332,43 @@ VMH_90_invalid <- fsetdiff(VMH_Raw_90,VMH_90_clean)
 # expansion method --------------------------------------------------------
 valid_dt <- 1
 
-VMH_90_clean[order(seconds_since_midnight)]
+VMH_90_clean %>%
+  group_by(AdHocTripNumber) %>%
+  arrange(seconds_since_midnight) %>%
+  mutate(trip_start_hour = first(Clock_Hour)) %>%
+  arrange(AdHocTripNumber,seconds_since_midnight) %>%
+  group_by(Inbound_Outbound,trip_start_hour,Service_Type) %>%
+  summarise(VBoard = sum(Boards)
+            ,VTrip = n_distinct(AdHocTripNumber))
 
+
+# find problem trips ------------------------------------------------------
+
+
+  
+x <- copy(VMH_90_clean)
+
+x[
+  order(seconds_since_midnight),trip_start_hour := first(Clock_Hour),AdHocTripNumber
+][
+  order(AdHocTripNumber,seconds_since_midnight)
+]
+
+VMH_Raw[,.N,.(Inbound_Outbound,Route)][order(Inbound_Outbound,Route)]
+
+VMH_90_clean[,.N,.(Inbound_Outbound,Route,Stop_Id)]
+VMH_90_clean[Inbound_Outbound==14 & Route==999 & Stop_Id==70016]
+
+
+
+VMH_Raw_90[Vehicle_ID==1972 & Transit_Day=="2021-01-01"][,.N,AdHocTripNumber]
+
+VMH_90_clean[Vehicle_ID==1972 & Transit_Day=="2021-01-01"][,.N,AdHocTripNumber]
+
+
+VMH_Raw_90[Route == 902 | Route == 901,.N,Inbound_Outbound]
+
+leaflet() %>%
+addCircles() %>%
+addTiles()
 
