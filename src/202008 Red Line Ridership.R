@@ -99,9 +99,9 @@ last_month_Avail  <- lubridate::floor_date((lubridate::floor_date(Sys.Date(),
                                                                   unit = "month") - 1),
                                            unit = "month")
 
-this_month_Avail_GPS_search <- as.POSIXct(this_month_Avail) + 111600
+this_month_Avail_GPS_search <- as.POSIXct(this_month_Avail) + 115200
 
-last_month_Avail_GPS_search <- as.POSIXct(last_month_Avail) - 234000
+last_month_Avail_GPS_search <- as.POSIXct(last_month_Avail) - 230400
 
 ### --- Data Import --- ###
 
@@ -147,10 +147,13 @@ Vehicle_Message_History_raw_sample$Epoch_Date <- as.Date("1970-01-01")
 
 Vehicle_Message_History_raw_sample$Transit_Day <- Vehicle_Message_History_raw_sample$Epoch_Date + lubridate::days(Vehicle_Message_History_raw_sample$Transit_Day_Unix)
 
+
 # just get Sept data
 
 Vehicle_Message_History_raw_sample <- Vehicle_Message_History_raw_sample %>%
   filter(Transit_Day >= last_month_Avail, Transit_Day < this_month_Avail)
+
+
 
 # confirm dates
 
@@ -512,7 +515,7 @@ invalid_df <- Vehicle_Message_History_raw_sample_invalid  %>% # invalid data
   summarise(Invalid_Boardings = sum(Boards),
             Invalid_Trips = n_distinct(AdHocUniqueTripNumber))
 
-invalid_df
+invalid_df %>% view()
 
 August_results <- left_join(valid_df, invalid_df,
                            by = c("Inbound_Outbound", "Trip_Start_Hour", "Service_Type")) %>%
@@ -524,7 +527,7 @@ August_results <- left_join(valid_df, invalid_df,
   mutate(Percent_Invalid_Trips  = Invalid_Trips / (Invalid_Trips + Valid_Trips))
 
 sum(invalid_df$Invalid_Trips)
-
+valid_df %>% view()
 sum(valid_df$Valid_Trips)
 
 # to get RL ridership: 
@@ -574,7 +577,7 @@ August_service_summary <- August_results %>%
   left_join(Service_Day_Set, by = "Service_Type") %>%
   mutate(Average_Daily_Ridership = Total_Boardings / Service_Days_in_Month) %>%
   mutate_if(is.numeric, round, 0) %>%
-  formattable::formattable()
+  gt::gt()
 
 August_total_ridership <- round(sum(August_results$Expanded_boardings, na.rm = TRUE), 0)
 
