@@ -49,6 +49,7 @@ VMH_Raw <- tbl(
     ,Latitude
     ,Longitude
     ,GPSStatus
+    ,CommStatus
     from avl.Vehicle_Message_History a (nolock)
     left join avl.Vehicle_Avl_History b
     on a.Avl_History_Id = b.Avl_History_Id
@@ -71,6 +72,7 @@ VMH_Raw <- tbl(
     ,Latitude
     ,Longitude
     ,GPSStatus
+    ,CommStatus
     from avl.Vehicle_Message_History a (nolock)
     left join avl.Vehicle_Avl_History b
     on a.Avl_History_Id = b.Avl_History_Id
@@ -94,11 +96,12 @@ VMH_Raw <- tbl(
     ,Latitude
     ,Longitude
     ,GPSStatus
+    ,CommStatus
     from avl.Vehicle_Message_History a (nolock)
     left join avl.Vehicle_Avl_History b
     on a.Avl_History_Id = b.Avl_History_Id
     where a.Time > '",VMH_StartTime,"'
-    and a.Time < DATEADD(day,2,'",VMH_EndTime,"')
+    and a.Time < DATEADD(day,1,'",VMH_EndTime,"')
     and Vehicle_ID = 1899"
     )#end paste
   )#endsql
@@ -114,7 +117,7 @@ VMH_Raw_90 <- VMH_Raw[Latitude > 39.709468 & Latitude < 39.877512][Longitude > -
 
 #do transit day
 VMH_Raw_90 <- VMH_Raw_90[, c("ClockTime","Date") := list(str_sub(Time, 12, 19),str_sub(Time, 1, 10))
-        ][, DateTest := ifelse(ClockTime<"03:00:00",1,0)
+        ][, DateTest := ifelse(ClockTime<"03:30:00",1,0)
           ][, Transit_Day := ifelse(DateTest ==1
                                     ,as_date(Date)-1
                                     ,as_date(Date))
@@ -126,23 +129,38 @@ VMH_Raw_90 <- VMH_Raw_90[, c("ClockTime","Date") := list(str_sub(Time, 12, 19),s
 
 VMH_Raw_90[
   ,`:=` (
-    seconds_between_dates = difftime(Date,Transit_Day,units = "secs")
-    , seconds_since_midnight_GPS_time = difftime(Time,Date,"secs")
+    seconds_since_midnight = difftime(as.IDate(Date)
+                                      ,as.IDate(Transit_Day)
+                                      ,units = "secs"
+                                      ) + difftime(as.ITime(Time)
+                                                   ,as.ITime(Date)
+                                                   ,units = "secs"
+                                                   )
   ) #end :=
 ][
-  ,seconds_since_midnight := seconds_between_dates + seconds_since_midnight_GPS_time
-]
-
-#add clock hour
-VMH_Raw_90[
+  #add clock hour
   ,Clock_Hour := str_sub(ClockTime,1,2)
 ]
+#consider adding error catching here for times
+
+# detour ------------------------------------------------------------------
+
+x<-VMH_Raw_90[Transit_Day != Date][1]
+
+x
+#looks good
+
+# end detour --------------------------------------------------------------
 
 
 #confirm dates
 VMH_Raw_90[,.N,Transit_Day][order(Transit_Day)]
-VMH_Raw_90[,.N,Vehicle_ID]
+#error catch here as well
 
+# date comparo ------------------------------------------------------------
+left_join(by_day,by_day_sam) %>% mutate(diff = N-`n()`)
+
+# end date comparo --------------------------------------------------------
 
 #set service type
 holidays_sunday_service <- c("USNewYearsDay", "USMemorialDay",
@@ -152,8 +170,8 @@ holidays_sunday_service <- c("USNewYearsDay", "USMemorialDay",
 holidays_saturday_service <- c("USMLKingsBirthday")
 
 #set sat sun
-holidays_sunday <- holiday(2000:2020, holidays_sunday_service)
-holidays_saturday <- holiday(2000:2020, holidays_saturday_service)
+holidays_sunday <- holiday(2000:2025, holidays_sunday_service)
+holidays_saturday <- holiday(2000:2025, holidays_saturday_service)
 #set service type column
 VMH_Raw_90[
   ,Service_Type := fcase(
@@ -165,6 +183,11 @@ VMH_Raw_90[
   )#end fcase 
 ]
 
+VMH_Raw_90[,.N,.(Service_Type,Transit_Day)]
+
+# detour ------------------------------------------------------------------
+
+
 VMH_Raw_90[
   ,AdHocTripNumber := str_c(
    Inbound_Outbound
@@ -174,6 +197,12 @@ VMH_Raw_90[
   )
 ]
 
+VMH_Raw_90[,uniqueN(AdHocTripNumber)]
+#different than sams
+
+
+# end detour --------------------------------------------------------------
+
 zero_b_a_vehicles <- VMH_Raw_90[
   
   #get zero board alights
@@ -182,9 +211,38 @@ zero_b_a_vehicles <- VMH_Raw_90[
   ,.(Transit_Day,Vehicle_ID)
 ][
   Boards == 0 | Alights == 0 
-]
+][order(Transit_Day)]
+
+
+# detour ------------------------------------------------------------------
+
+zero_boarding_alighting_vehicles_VMH<-data.table(zero_boarding_alighting_vehicles_VMH)
+
+merge.data.table(zero_boarding_alighting_vehicles_VMH,zero_b_a_vehicles,by = c("Transit_Day","Vehicle_ID"),all = T)
+
+VMH_Raw_90[Date == "2021-01-11" & Vehicle_ID == 1991]
+
+VMH_Raw[,.N,.(GPSStatus,CommStatus)]
+
+Vehicle_Message_History_raw_sample %>%
+    filter(Transit_Day == "2021-01-11"
+         ,Vehicle_ID == 1991)
+#fuck
+#investigate commstatus
+# "The communications status of this vehicle at this time.  Possible values are:
+# 0 - Bad GPS
+# 1 - Bad Comms
+# 2 - Good Comms
+# 3 - Inactive (Out of Service)"
+
+
+#end detour
 
 VMH_Raw_90_no_zero <- VMH_Raw_90[!zero_b_a_vehicles, on = c("Transit_Day","Vehicle_ID")]
+
+
+
+
 
 # check here
 # VMH_Raw_90_no_zero[
@@ -204,7 +262,7 @@ VMH_Raw_90_no_zero[
   stat_bin(binwidth = 1, geom = "text", aes(label = ..x..), vjust = -1.5)
 
 #adjust this!!!!!!!!!!!!
-obvious_outlier <- 1250
+obvious_outlier <- 500
 
 outlier_apc_vehicles <- VMH_Raw_90_no_zero[
   ,.(Boards = sum(Boards)
@@ -270,7 +328,7 @@ VMH_90_invalid <- fsetdiff(VMH_Raw_90,VMH_90_clean)
 
 
 # expansion method --------------------------------------------------------
-valid_dt <-1
+valid_dt <- 1
 
 VMH_90_clean[order(seconds_since_midnight)]
 
