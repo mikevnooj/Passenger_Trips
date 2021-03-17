@@ -9,13 +9,13 @@ DimServiceLevel <- tbl(con_DW,"DimServiceLevel") %>%
   collect() %>% 
   data.table(key = "ServiceLevelKey")
 
-DimDate_start_pre_cov_nn <- tbl(con_DW, "DimDate") %>%
-  filter(CalendarDateChar == "09/01/2020") %>%
+DimDate_start_pre_cov_mpo <- tbl(con_DW, "DimDate") %>%
+  filter(CalendarDateChar == "09/14/2019") %>%
   collect() %>% 
   setDT(key = "DateKey")
 
-DimDate_end_pre_cov_nn <- tbl(con_DW, "DimDate") %>%
-  filter(CalendarDateChar == "10/01/2020") %>%
+DimDate_end_pre_cov_mpo <- tbl(con_DW, "DimDate") %>%
+  filter(CalendarDateChar == "03/14/2020") %>%
   collect() %>% 
   setDT(key = "DateKey")
 
@@ -46,8 +46,8 @@ DimRoute <- tbl(con_DW,"DimRoute") %>%
 FactFare <- tbl(con_DW, "FactFare") %>%
   filter(
     FareKey %in% c(1001, 1002),
-    DateKey >= local(DimDate_start_post_cov_nn$DateKey),
-    DateKey <= local(DimDate_end_post_cov_nn$DateKey)
+    DateKey >= local(DimDate_start_pre_cov_mpo$DateKey),
+    DateKey <= local(DimDate_end_pre_cov_mpo$DateKey)
   ) %>% #end filter
   collect() %>% 
   setDT()
