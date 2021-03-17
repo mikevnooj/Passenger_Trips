@@ -21,15 +21,36 @@ con_rep <- DBI::dbConnect(odbc::odbc(), Driver = "SQL Server", Server = "REPSQLP
 
 this_month_Avail <- lubridate::floor_date(Sys.Date(), unit = "month")
 
-last_month_Avail  <- lubridate::floor_date((lubridate::floor_date(Sys.Date(),
-                                                                  unit = "month") - 1),
-                                           unit = "month")
+last_month_Avail  <- lubridate::floor_date(lubridate::floor_date(Sys.Date()
+                                                                 ,unit = "month"
+                                                                 ) - 1 #end floor_date
+                                           ,unit = "month"
+                                           )#end floor_date
+
+month <- "2020-03-01"
+
+this_month_Avail <- lubridate::floor_date(x = lubridate::as_date(month)
+                                          , unit = "month"
+                                          )
+
+last_month_Avail <- lubridate::floor_date(lubridate::floor_date(lubridate::as_date(month)
+                                                                , unit = "month"
+                                                                ) - 1 #end lubridate::floor_date
+                                          ,unit = "month"
+                                          )#end lubridate::floor_date
+
+
+
+
+
+
 
 # this_month_Avail_GPS_search <- as.POSIXct(this_month_Avail) + 111600
 # 
 # last_month_Avail_GPS_search <- as.POSIXct(last_month_Avail) - 234000
 
 VMH_StartTime <- str_remove_all(last_month_Avail,"-")
+
 VMH_EndTime <- str_remove_all(this_month_Avail,"-")
 
 
@@ -85,27 +106,27 @@ VMH_Raw <- tbl(
     
     UNION
     
-    select a.Time
-    ,a.Route
-    ,Boards
-    ,Alights
-    ,Trip
-    ,Vehicle_ID
-    ,Stop_Name
-    ,Stop_Id
-    ,Inbound_Outbound
-    ,Departure_Time
-    ,Latitude
-    ,Longitude
-    ,GPSStatus
-    ,CommStatus
-    from avl.Vehicle_Message_History a (nolock)
-    left join avl.Vehicle_Avl_History b
-    on a.Avl_History_Id = b.Avl_History_Id
-    where a.Time > '",VMH_StartTime,"'
-    and a.Time < DATEADD(day,1,'",VMH_EndTime,"')
-    and Vehicle_ID = 1899"
-    )#end paste
+      select a.Time
+      ,a.Route
+      ,Boards
+      ,Alights
+      ,Trip
+      ,Vehicle_ID
+      ,Stop_Name
+      ,Stop_Id
+      ,Inbound_Outbound
+      ,Departure_Time
+      ,Latitude
+      ,Longitude
+      ,GPSStatus
+      ,CommStatus
+      from avl.Vehicle_Message_History a (nolock)
+      left join avl.Vehicle_Avl_History b
+      on a.Avl_History_Id = b.Avl_History_Id
+      where a.Time > '",VMH_StartTime,"'
+      and a.Time < DATEADD(day,1,'",VMH_EndTime,"')
+      and Vehicle_ID = 1899"
+      )#end paste
   )#endsql
 ) %>% #end tbl
   collect() %>%
@@ -366,9 +387,58 @@ VMH_Raw_90[Vehicle_ID==1972 & Transit_Day=="2021-01-01"][,.N,AdHocTripNumber]
 VMH_90_clean[Vehicle_ID==1972 & Transit_Day=="2021-01-01"][,.N,AdHocTripNumber]
 
 
-VMH_Raw_90[Route == 902 | Route == 901,.N,Inbound_Outbound]
-
+VMH_Raw_90[Route == 90 & Inbound_Outbound %in% c(14,9)] %>%
 leaflet() %>%
 addCircles() %>%
 addTiles()
+
+
+# detect problem trips ----------------------------------------------------
+
+#cases
+#nb - next trip enters local, changeover not detected at 66th
+#nb - next trip enters local, changeover detected, but included by bounding erro
+#nb - next trip turns around, changeover not detected, direction changes
+#nb - next trip turns around, changeover not detected, direction stuck
+
+#start by adding adhoc trip to vmh_raw
+VMH_Raw_test <- copy(VMH_Raw)
+
+VMH_Raw_test[
+  #add transit day first
+  , c("ClockTime","Date") := list(str_sub(Time, 12, 19),str_sub(Time, 1, 10))
+  ][, DateTest := ifelse(ClockTime<"03:30:00",1,0)
+    ][, Transit_Day := ifelse(DateTest ==1
+                              ,as_date(Date)-1
+                              ,as_date(Date))
+      ][,Transit_Day := as_date("1970-01-01")+days(Transit_Day)
+        ][Transit_Day >= last_month_Avail & Transit_Day < this_month_Avail
+          ][Vehicle_ID > 1950 & Vehicle_ID < 2000 | Vehicle_ID == 1899
+  
+]
+
+VMH_Raw_test[
+  ,AdHocTripNumber := str_c(
+    Inbound_Outbound
+    ,str_remove_all(Transit_Day,"-")
+    ,Trip
+    ,Vehicle_ID
+  )
+]
+
+# how many northbound trips have 
+ 
+VMH_Raw_90[,.N,AdHocTripNumber]
+
+VMH_Raw_90[AdHocTripNumber == "12020020121061975"] %>% View()
+  leaflet() %>%
+  addCircles() %>%
+  addTiles()
+
+VMH_Raw_test[AdHocTripNumber == 92020020501986] %>%
+leaflet() %>%
+addCircles() %>%
+addTiles()
+
+VMH_Raw_test[Vehicle_ID == 1986 & Date == "2020-02-05"]
 
