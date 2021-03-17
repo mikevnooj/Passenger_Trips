@@ -110,7 +110,13 @@
 # also want 2018 by stop by route
 
 
-
+# 2021/02/23
+# MPO Wants weekly total by stop by route for 16, 31, and 902
+# 2 ranges
+# pre-cov
+# 2019/09/1 thru 2020/03/14
+# and
+# 2020/09/01 thru 2021/02/01
 
 
 ### --- Libraries --- ###
@@ -136,6 +142,10 @@ Apc_BYD$Clock_Time <- str_sub(Apc_BYD$GPS_Time, 12, 19)
 
 Apc_BYD$DateTest <- ifelse(Apc_BYD$Clock_Time < 
                                   "03:00:00", 1, 0)
+
+
+
+
 
 # now change Transit Day based on DateTest
 
@@ -8808,4 +8818,597 @@ ada[prec[,-2]][,on_change := `i.Average Daily On` - `Average Daily On`
 
 # get 2018 by stop by route -----------------------------------------------
 
+
+
+# 2021/02/23 MPO ----------------------------------------------------------
+
+library(dplyr)
+library(data.table)
+library(ggplot2)
+
+
+# Import ------------------------------------------------------------------
+
+
+#add Stop Ridership Col Names
+Stop_Ridership_col_names <- c("Stop Number", "Stop Name", "Total Boardings", "Average Daily Boardings","Total Alightings","Average Daily Alightings","Days")
+
+
+
+# do sep thru march for service planning ADA --------------------------
+
+
+# Import ------------------------------------------------------------------
+
+
+# db connection
+
+con_DW <- DBI::dbConnect(odbc::odbc(), Driver = "SQL Server", Server = "AVAILDWHP01VW", 
+                         Database = "DW_IndyGo", Port = 1433)
+
+
+# get applicable dates
+
+DimServiceLevel <- tbl(con_DW,"DimServiceLevel") %>% 
+  collect() %>% 
+  data.table(key = "ServiceLevelKey")
+
+DimDate_start_MPO_pre <- tbl(con_DW, "DimDate") %>%
+  filter(CalendarDateChar == "09/01/2019") %>%
+  collect() %>% 
+  setDT(key = "DateKey")
+
+DimDate_end_MPO_pre <- tbl(con_DW, "DimDate") %>%
+  filter(CalendarDateChar == "03/14/2020") %>%
+  collect() %>% 
+  setDT(key = "DateKey")
+
+
+DimDate_full <- tbl(con_DW, "DimDate") %>%
+  collect() %>% 
+  setDT(key = "DateKey")
+
+# get stops
+DimStop <- tbl(con_DW,"DimStop") %>% 
+  collect() %>% 
+  setDT(key = "StopKey")
+
+# get farekey
+
+DimFare <- tbl(con_DW, "DimFare") %>%
+  collect() %>%
+  setDT(key = "FareKey")
+
+# get Routes
+DimRoute <- tbl(con_DW,"DimRoute") %>%
+  filter(RouteFareboxID %in% c("16","31","90","901","902")) %>%
+  collect() %>% 
+  setDT(key = "RouteKey")
+
+# get FF boarding and alighting
+
+FactFare_MPO_pre <- tbl(con_DW, "FactFare") %>%
+  filter(
+    FareKey %in% c(1001, 1002)
+    ,DateKey >= local(DimDate_start_MPO_pre$DateKey)
+    ,DateKey <= local(DimDate_end_MPO_pre$DateKey)
+    ,RouteKey %in% local(DimRoute$RouteKey)
+  ) %>% #end filter
+  collect() %>% 
+  setDT()
+
+# detour ------------------------------------------------------------------
+
+
+# bullshit <- tbl(con_DW,"FactFare") %>%
+#   filter(FareKey %in% c(1001,1002)
+#          ,DateKey == 8224
+#          ,RouteKey %in% local(DimRoute$RouteKey)
+#          ) %>%
+#   collect() %>%
+#     setDT()
+  
+
+# end detour --------------------------------------------------------------
+# Get Weekday only --------------------------------------------------------
+
+
+#join servicelevel and a bit of stop info and dimfare while we're here
+
+#mget for memory efficiency, keeps location the same
+FactFare_MPO_pre[
+  #skinny stops first
+  DimStop[,.(StopKey,StopID)]
+  ,on = "StopKey"
+  ,names(DimStop[,.(StopKey,StopID)]) := mget(paste0("i.",names(DimStop[,.(StopKey,StopID)])))
+  ][
+    #then service level skinny
+    DimServiceLevel[,.(ServiceLevelKey,ServiceLevelReportLabel)]
+    ,on = "ServiceLevelKey"
+    ,names(DimServiceLevel[,.(ServiceLevelKey,ServiceLevelReportLabel)]) := mget(paste0("i.",names(DimServiceLevel[,.(ServiceLevelKey,ServiceLevelReportLabel)])))
+    ][
+      #then dimfareskinny
+      DimFare[,.(FareKey,FareReportLabel)]
+      , on = "FareKey"
+      ,names(DimFare[,.(FareKey,FareReportLabel)]) := mget(paste0("i.",names(DimFare[,.(FareKey,FareReportLabel)])))
+      ][
+        #then dimroute
+        DimRoute[,.(RouteKey,RouteReportLabel)]
+        , on = "RouteKey"
+        ,names(DimRoute[,.(RouteKey,RouteReportLabel)]) := mget(paste0("i.",names(DimRoute[,.(RouteKey,RouteReportLabel)])))
+        ][,Service_Type := sub(".*-","",ServiceLevelReportLabel)
+          ][
+            DimDate_full
+            , on = "DateKey"
+            ,names(DimDate_full[,.(DateKey,CalendarDate)]) := mget(paste0("i.",names(DimDate_full[,.(DateKey,CalendarDate)])))
+          ]
+
+
+
+# date tests --------------------------------------------------------------
+
+
+calendar <- seq.Date(as.IDate(DimDate_start_MPO_pre[,CalendarDate])
+                     ,as.IDate(DimDate_end_MPO_pre[,CalendarDate])
+                     ,"day")
+all(
+  calendar ==
+    sort(
+      unique(
+        #throw your dataframe$datecolumn or whatever in here
+        FactFare_MPO_pre[,unique(CalendarDate)]
+        
+      )#end unique
+    )#end sort
+)#end all
+
+fsetdiff(data.table(calendar),FactFare_MPO_pre[,.(calendar = lubridate::as_date(CalendarDate))])
+
+
+# transit day -------------------------------------------------------------
+
+FactFare_MPO_pre[, c("ClockTime","Date") := list(as.ITime(stringr::str_sub(ServiceDateTime, 12, 19)),as.IDate(stringr::str_sub(ServiceDateTime, 1, 10)))
+                 ][
+                   #label prev day or current
+                   , DateTest := ifelse(ClockTime<as.ITime("03:00:00"),1,0)
+                   ][
+                     , Transit_Day := fifelse(
+                       DateTest ==1
+                       ,lubridate::as_date(Date)-1
+                       ,lubridate::as_date(Date)
+                     )#end fifelse
+                     ][
+                       ,Transit_Day := lubridate::as_date("1970-01-01")+lubridate::days(Transit_Day)
+                       ]
+
+
+
+
+# weekdays appearing ------------------------------------------------------
+
+FactFareDateCount <- 
+  FactFare_MPO_pre[
+    Service_Type == "Weekday"
+  ][
+    ,.(Days = uniqueN(Transit_Day))
+    ,StopID
+  ]
+
+FactFare_MPO_pre[StopID == 90014,.N,Transit_Day]
+
+
+FactFare_MPO_pre[
+  Service_Type == "Weekday"
+]
+
+FactFare_MPO_pre[StopID == 90014][,.N,.(Transit_Day,Service_Type,RouteReportLabel)]
+DimStop[StopID == 90014]
+
+# get daily boards, then clean bad vehicles -------------------------------
+FF_MPO_wkdy <- FactFare_MPO_pre[Service_Type == "Weekday"]
+
+FF_MPO_pre_daily <- FF_MPO_wkdy[
+  ,sum(FareCount)
+  ,.(FareReportLabel,Transit_Day,VehicleKey)
+][,dcast(
+  .SD
+  ,Transit_Day + VehicleKey ~ FareReportLabel
+)]
+
+#get zeros
+FF_zero <- FF_MPO_pre_daily[Boarding == 0 | Alighting == 0]
+
+#remove them
+FF_no_zero <- FactFare_MPO_pre[!FF_zero,on = c(Transit_Day = "Transit_Day",VehicleKey = "VehicleKey")]
+
+
+FF_MPO_pre_daily[!FF_zero,on = c(Transit_Day = "Transit_Day",VehicleKey = "VehicleKey")] %>%
+  ggplot(aes(x=Boarding)) +
+  geom_histogram(binwidth = 1) +
+  stat_bin(binwidth = 1, geom = "text", aes(label = ..x..), vjust = -1.5)
+
+outlier_apc_vehicles <- FF_MPO_pre_daily[Boarding > 1250]
+
+three_deeves <- FF_no_zero[
+  !outlier_apc_vehicles, on = c("Transit_Day","VehicleKey")
+][
+  ,sum(FareCount)
+  ,.(
+    FareReportLabel
+    ,Transit_Day
+    ,VehicleKey
+  )
+][
+  ,dcast(
+    .SD
+    ,Transit_Day + VehicleKey ~ FareReportLabel
+    ,fill = 0
+  )
+][,sd(Boarding)*3+mean(Boarding)]
+
+FF_MPO_pre_daily[,pct_diff := (Boarding-Alighting)/((Boarding+Alighting)/2)]
+
+FF_three_deeves_big_pct <- FF_MPO_pre_daily[
+  Boarding > three_deeves & pct_diff > 0.1 |
+    Boarding > three_deeves & pct_diff < -0.1
+]
+
+FF_MPO_pre_clean <- FF_no_zero[
+  !FF_three_deeves_big_pct
+  , on = c("Transit_Day" , "VehicleKey")
+]
+
+
+# get boards by stop ------------------------------------------------------
+
+DailyStop <- FF_MPO_pre_clean[
+  StopID != 0 & StopID < 99000
+  ,sum(FareCount)
+  ,.(FareReportLabel,Transit_Day,StopID)
+]
+
+StopSums <- dcast(DailyStop[,sum(V1),.(StopID,FareReportLabel)]
+                  ,StopID ~ FareReportLabel)
+
+
+# get average daily boarding/alighting ------------------------------------
+FF_MPO_pre_summary <- DimStop[
+  #get max StopKey row from DimStop so we have one single StopDesc
+  DimStop[
+    ,.I[
+      StopKey == max(StopKey)
+    ]
+    , by = StopID
+  ]$V1
+][
+  #select only stopid and stop desc
+  ,.(StopID,StopDesc)
+][
+  #create data table of joined sums and date count, then use that to get avgs while joining to stopID,StopDesc
+  merge.data.table(
+    StopSums
+    ,FactFareDateCount
+    ,"StopID"
+    ,all.x = T
+  )[
+    ,`:=`(
+      Average_Boardings = round(Boarding/Days,1)
+      ,Average_Alightings = round(Alighting/Days,1)
+    )#end :=
+  ]
+  ,on = c(StopID = "StopID")
+][!is.na(Days)]
+
+setcolorder(FF_MPO_pre_summary, c(1,2,4,6,3,7))
+
+setnames(FF_MPO_pre_summary,names(FF_MPO_pre_summary),Stop_Ridership_col_names)
+
+fwrite(FF_MPO_pre_summary,"data//FF_MPO_pre_summary.csv")
+
+
+
+
+FF_MPO_pre_clean[
+  #first get daily sums
+  ,sum(FareCount)
+  ,.(FareReportLabel,Transit_Day,RouteReportLabel,StopID)
+][,dcast(
+  .SD
+  ,Transit_Day + StopID + RouteReportLabel ~ FareReportLabel
+)
+][
+  #then cut by week
+  ,.(
+    Boardings = sum(Boarding)
+    ,Alightings = sum(Alighting)
+    ,Number_of_Days = uniqueN(Transit_Day)
+  )
+  
+  ,.(
+    week_start = as.IDate(cut(Transit_Day,"week", start.on.monday = FALSE))
+    ,StopID
+    ,Route = RouteReportLabel
+  )
+][
+  StopID != 0
+][
+  order(StopID,week_start)
+][
+ ,View(.SD) 
+]
+
+
+[
+  ,.N
+  ,Number_of_Days
+]
+
+# Import ------------------------------------------------------------------
+
+
+#add Stop Ridership Col Names
+Stop_Ridership_col_names <- c("Stop Number", "Stop Name", "Total Boardings", "Average Daily Boardings","Total Alightings","Average Daily Alightings","Days")
+
+
+
+# do sep thru march for service planning ADA --------------------------
+
+
+# Import ------------------------------------------------------------------
+
+
+# db connection
+
+con_DW <- DBI::dbConnect(odbc::odbc(), Driver = "SQL Server", Server = "AVAILDWHP01VW", 
+                         Database = "DW_IndyGo", Port = 1433)
+
+
+# get applicable dates
+
+DimServiceLevel <- tbl(con_DW,"DimServiceLevel") %>% 
+  collect() %>% 
+  data.table(key = "ServiceLevelKey")
+
+DimDate_start_MPO_post <- tbl(con_DW, "DimDate") %>%
+  filter(CalendarDateChar == "09/01/2020") %>%
+  collect() %>% 
+  setDT(key = "DateKey")
+
+DimDate_end_MPO_post <- tbl(con_DW, "DimDate") %>%
+  filter(CalendarDateChar == "02/01/2021") %>%
+  collect() %>% 
+  setDT(key = "DateKey")
+
+DimDate_full <- tbl(con_DW, "DimDate") %>%
+  collect() %>% 
+  setDT(key = "DateKey")
+
+# get stops
+DimStop <- tbl(con_DW,"DimStop") %>% 
+  collect() %>% 
+  setDT(key = "StopKey")
+
+# get farekey
+
+DimFare <- tbl(con_DW, "DimFare") %>%
+  collect() %>%
+  setDT(key = "FareKey")
+
+# get Routes
+DimRoute <- tbl(con_DW,"DimRoute") %>%
+  filter(RouteFareboxID %in% c("16","31","90","901","902")) %>%
+  collect() %>% 
+  setDT(key = "RouteKey")
+
+# get FF boarding and alighting
+
+FactFare_MPO_post <- tbl(con_DW, "FactFare") %>%
+  filter(
+    FareKey %in% c(1001, 1002)
+    ,DateKey >= local(DimDate_start_MPO_post$DateKey)
+    ,DateKey <= local(DimDate_end_MPO_post$DateKey)
+    ,RouteKey %in% local(DimRoute$RouteKey)
+  ) %>% #end filter
+  collect() %>% 
+  setDT()
+
+# detour ------------------------------------------------------------------
+
+
+# bullshit <- tbl(con_DW,"FactFare") %>%
+#   filter(FareKey %in% c(1001,1002)
+#          ,DateKey == 8224
+#          ,RouteKey %in% local(DimRoute$RouteKey)
+#          ) %>%
+#   collect() %>%
+#     setDT()
+
+
+# end detour --------------------------------------------------------------
+# Get Weekday only --------------------------------------------------------
+
+
+#join servicelevel and a bit of stop info and dimfare while we're here
+
+#mget for memory efficiency, keeps location the same
+FactFare_MPO_post[
+  #skinny stops first
+  DimStop[,.(StopKey,StopID)]
+  ,on = "StopKey"
+  ,names(DimStop[,.(StopKey,StopID)]) := mget(paste0("i.",names(DimStop[,.(StopKey,StopID)])))
+  ][
+    #then service level skinny
+    DimServiceLevel[,.(ServiceLevelKey,ServiceLevelReportLabel)]
+    ,on = "ServiceLevelKey"
+    ,names(DimServiceLevel[,.(ServiceLevelKey,ServiceLevelReportLabel)]) := mget(paste0("i.",names(DimServiceLevel[,.(ServiceLevelKey,ServiceLevelReportLabel)])))
+    ][
+      #then dimfareskinny
+      DimFare[,.(FareKey,FareReportLabel)]
+      , on = "FareKey"
+      ,names(DimFare[,.(FareKey,FareReportLabel)]) := mget(paste0("i.",names(DimFare[,.(FareKey,FareReportLabel)])))
+      ][
+        #then dimroute
+        DimRoute[,.(RouteKey,RouteReportLabel)]
+        , on = "RouteKey"
+        ,names(DimRoute[,.(RouteKey,RouteReportLabel)]) := mget(paste0("i.",names(DimRoute[,.(RouteKey,RouteReportLabel)])))
+        ][,Service_Type := sub(".*-","",ServiceLevelReportLabel)
+          ][
+            DimDate_full
+            , on = "DateKey"
+            ,names(DimDate_full[,.(DateKey,CalendarDate)]) := mget(paste0("i.",names(DimDate_full[,.(DateKey,CalendarDate)])))
+            ]
+
+
+
+# date tests --------------------------------------------------------------
+
+
+calendar <- seq.Date(as.IDate(DimDate_start_MPO_post[,CalendarDate])
+                     ,as.IDate(DimDate_end_MPO_post[,CalendarDate])
+                     ,"day")
+all(
+  calendar ==
+    sort(
+      unique(
+        #throw your dataframe$datecolumn or whatever in here
+        FactFare_MPO_post[,unique(CalendarDate)]
+        
+      )#end unique
+    )#end sort
+)#end all
+
+fsetdiff(data.table(calendar),FactFare_MPO_post[,.(calendar = lubridate::as_date(CalendarDate))])
+
+
+# transit day -------------------------------------------------------------
+
+FactFare_MPO_post[, c("ClockTime","Date") := list(as.ITime(stringr::str_sub(ServiceDateTime, 12, 19)),as.IDate(stringr::str_sub(ServiceDateTime, 1, 10)))
+                 ][
+                   #label prev day or current
+                   , DateTest := ifelse(ClockTime<as.ITime("03:00:00"),1,0)
+                   ][
+                     , Transit_Day := fifelse(
+                       DateTest ==1
+                       ,lubridate::as_date(Date)-1
+                       ,lubridate::as_date(Date)
+                     )#end fifelse
+                     ][
+                       ,Transit_Day := lubridate::as_date("1970-01-01")+lubridate::days(Transit_Day)
+                       ]
+
+
+
+
+# weekdays appearing ------------------------------------------------------
+
+FactFareDateCount <- 
+  FactFare_MPO_post[
+    Service_Type == "Weekday"
+    ][
+      ,.(Days = uniqueN(Transit_Day))
+      ,StopID
+      ]
+
+
+
+# get daily boards, then clean bad vehicles -------------------------------
+FF_MPO_wkdy <- FactFare_MPO_post[Service_Type == "Weekday"]
+
+FF_MPO_post_daily <- FF_MPO_wkdy[
+  ,sum(FareCount)
+  ,.(FareReportLabel,Transit_Day,VehicleKey)
+  ][,dcast(
+    .SD
+    ,Transit_Day + VehicleKey ~ FareReportLabel
+  )]
+
+#get zeros
+FF_zero <- FF_MPO_post_daily[Boarding == 0 | Alighting == 0]
+
+#remove them
+FF_no_zero <- FactFare_MPO_post[!FF_zero,on = c(Transit_Day = "Transit_Day",VehicleKey = "VehicleKey")]
+
+
+FF_MPO_post_daily[!FF_zero,on = c(Transit_Day = "Transit_Day",VehicleKey = "VehicleKey")] %>%
+  ggplot(aes(x=Boarding)) +
+  geom_histogram(binwidth = 1) +
+  stat_bin(binwidth = 1, geom = "text", aes(label = ..x..), vjust = -1.5)
+
+outlier_apc_vehicles <- FF_MPO_post_daily[Boarding > 1250]
+
+three_deeves <- FF_no_zero[
+  !outlier_apc_vehicles, on = c("Transit_Day","VehicleKey")
+  ][
+    ,sum(FareCount)
+    ,.(
+      FareReportLabel
+      ,Transit_Day
+      ,VehicleKey
+    )
+    ][
+      ,dcast(
+        .SD
+        ,Transit_Day + VehicleKey ~ FareReportLabel
+        ,fill = 0
+      )
+      ][,sd(Boarding)*3+mean(Boarding)]
+
+FF_MPO_post_daily[,pct_diff := (Boarding-Alighting)/((Boarding+Alighting)/2)]
+
+FF_three_deeves_big_pct <- FF_MPO_post_daily[
+  Boarding > three_deeves & pct_diff > 0.1 |
+    Boarding > three_deeves & pct_diff < -0.1
+  ]
+
+FF_MPO_post_clean <- FF_no_zero[
+  !FF_three_deeves_big_pct
+  , on = c("Transit_Day" , "VehicleKey")
+  ]
+
+
+# get boards by stop ------------------------------------------------------
+
+DailyStop <- FF_MPO_post_clean[
+  StopID != 0 & StopID < 99000
+  ,sum(FareCount)
+  ,.(FareReportLabel,Transit_Day,StopID)
+  ]
+
+StopSums <- dcast(DailyStop[,sum(V1),.(StopID,FareReportLabel)]
+                  ,StopID ~ FareReportLabel)
+
+
+# get average daily boarding/alighting ------------------------------------
+FF_MPO_post_summary <- DimStop[
+  #get max StopKey row from DimStop so we have one single StopDesc
+  DimStop[
+    ,.I[
+      StopKey == max(StopKey)
+      ]
+    , by = StopID
+    ]$V1
+  ][
+    #select only stopid and stop desc
+    ,.(StopID,StopDesc)
+    ][
+      #create data table of joined sums and date count, then use that to get avgs while joining to stopID,StopDesc
+      merge.data.table(
+        StopSums
+        ,FactFareDateCount
+        ,"StopID"
+        ,all.x = T
+      )[
+        ,`:=`(
+          Average_Boardings = round(Boarding/Days,1)
+          ,Average_Alightings = round(Alighting/Days,1)
+        )#end :=
+        ]
+      ,on = c(StopID = "StopID")
+      ][!is.na(Days)]
+
+setcolorder(FF_MPO_post_summary, c(1,2,4,6,3,7))
+
+setnames(FF_MPO_post_summary,names(FF_MPO_post_summary),Stop_Ridership_col_names)
+
+fwrite(FF_MPO_post_summary,"data//FF_MPO_post_summary.csv")
 
