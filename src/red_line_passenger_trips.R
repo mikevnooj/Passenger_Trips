@@ -19,9 +19,9 @@ con_rep <- DBI::dbConnect(odbc::odbc(), Driver = "SQL Server", Server = "REPSQLP
 
 # Time --------------------------------------------------------------------
 
-this_month_Avail <- lubridate::floor_date(Sys.Date(), unit = "month")
+this_month_Avail <- lubridate::floor_date(Sys.Date()-365, unit = "month")
 
-last_month_Avail  <- lubridate::floor_date(lubridate::floor_date(Sys.Date()
+last_month_Avail  <- lubridate::floor_date(lubridate::floor_date(Sys.Date()-365
                                                                  ,unit = "month"
                                                                  ) - 1 #end floor_date
                                            ,unit = "month"
@@ -139,38 +139,45 @@ VMH_Raw <- tbl(
 VMH_Raw_90 <- VMH_Raw[Latitude > 39.709468 & Latitude < 39.877512][Longitude > -86.173321]
 
 #do transit day
-VMH_Raw_90 <- VMH_Raw_90[, c("ClockTime","Date") := list(str_sub(Time, 12, 19),str_sub(Time, 1, 10))
-        ][, DateTest := ifelse(ClockTime<"03:30:00",1,0)
-          ][, Transit_Day := ifelse(DateTest ==1
-                                    ,as_date(Date)-1
-                                    ,as_date(Date))
-            ][,Transit_Day := as_date("1970-01-01")+days(Transit_Day)
-              ][Transit_Day >= last_month_Avail & Transit_Day < this_month_Avail
-                ][Vehicle_ID > 1950 & Vehicle_ID < 2000 | Vehicle_ID == 1899]
+
+Transit_Day_Cutoff <- as.ITime("03:30:00")
+
+
+
+
+VMH_Raw_90[
+  , DateTest := fifelse(data.table::as.ITime(Time) < Transit_Day_Cutoff
+                        , 1
+                        , 0
+                        ) #end fifelse()
+  ][
+    , Transit_Day := fifelse(DateTest == 1
+                             ,data.table::as.IDate(Time)-1
+                             ,data.table::as.IDate(Time)
+                             )
+    ]
 
 #add seconds since midnight for later
 
 VMH_Raw_90[
-  ,`:=` (
-    seconds_since_midnight = difftime(as.IDate(Date)
-                                      ,as.IDate(Transit_Day)
-                                      ,units = "secs"
-                                      ) + difftime(as.ITime(Time)
-                                                   ,as.ITime(Date)
-                                                   ,units = "secs"
-                                                   )
-  ) #end :=
+  ,seconds_since_midnight := fifelse(Transit_Day == as.IDate(Time)
+          ,as.numeric(as.ITime(Time) - as.ITime(Transit_Day))
+          ,as.numeric(as.ITime(Time))+24*60*60)
 ][
-  #add clock hour
-  ,Clock_Hour := str_sub(ClockTime,1,2)
+  ,Clock_Hour := data.table::hour(Time)
 ]
+
+
+
 #consider adding error catching here for times
 
 # detour ------------------------------------------------------------------
 
-x<-VMH_Raw_90[Transit_Day != Date][1]
 
-x
+VMH_Raw_90[Transit_Day != as.IDate(Time)][1]
+
+
+
 #looks good
 
 # end detour --------------------------------------------------------------
@@ -181,7 +188,7 @@ VMH_Raw_90[,.N,Transit_Day][order(Transit_Day)]
 #error catch here as well
 
 # date comparo ------------------------------------------------------------
-left_join(by_day,by_day_sam) %>% mutate(diff = N-`n()`)
+#left_join(by_day,by_day_sam) %>% mutate(diff = N-`n()`)
 
 # end date comparo --------------------------------------------------------
 
@@ -195,18 +202,27 @@ holidays_saturday_service <- c("USMLKingsBirthday")
 #set sat sun
 holidays_sunday <- holiday(2000:2025, holidays_sunday_service)
 holidays_saturday <- holiday(2000:2025, holidays_saturday_service)
+
 #set service type column
 VMH_Raw_90[
-  ,Service_Type := fcase(
-    Transit_Day %in% as_date(holidays_saturday@Data), "Saturday"
-    ,Transit_Day %in% as_date(holidays_sunday@Data), "Sunday"
-    ,weekdays(Transit_Day) %in% c("Monday","Tuesday","Wednesday","Thursday","Friday"), "Weekday"
-    ,weekdays(Transit_Day) == "Saturday", "Saturday"
-    ,weekdays(Transit_Day) == "Sunday", "Sunday"
-  )#end fcase 
+  ,Service_Type := fcase(Transit_Day %in% as.IDate(holidays_saturday@Data)
+                         , "Saturday"
+                         , Transit_Day %in% as.IDate(holidays_sunday@Data)
+                         , "Sunday"
+                         , weekdays(Transit_Day) %in% c("Monday"
+                                                        , "Tuesday"
+                                                        , "Wednesday"
+                                                        , "Thursday"
+                                                        , "Friday"
+                                                        )#end c
+                         , "Weekday"
+                         , weekdays(Transit_Day) == "Saturday"
+                         , "Saturday"
+                         ,weekdays(Transit_Day) == "Sunday"
+                         , "Sunday"
+                         )#end fcase 
 ]
 
-VMH_Raw_90[,.N,.(Service_Type,Transit_Day)]
 
 # detour ------------------------------------------------------------------
 
@@ -220,8 +236,8 @@ VMH_Raw_90[
   )
 ]
 
-VMH_Raw_90[,uniqueN(AdHocTripNumber)]
-#different than sams
+VMH_Raw_90[ , uniqueN(AdHocTripNumber)]
+#different than sams but its fine maybe
 
 
 # end detour --------------------------------------------------------------
@@ -229,27 +245,32 @@ VMH_Raw_90[,uniqueN(AdHocTripNumber)]
 zero_b_a_vehicles <- VMH_Raw_90[
   
   #get zero board alights
-  ,.(Boards = sum(Boards)
-     ,Alights = sum(Alights))
-  ,.(Transit_Day,Vehicle_ID)
+  , .(Boards = sum(Boards)
+     , Alights = sum(Alights)
+     )
+  , .(Transit_Day
+     , Vehicle_ID
+     )
 ][
   Boards == 0 | Alights == 0 
-][order(Transit_Day)]
+][
+  order(Transit_Day)
+]
 
 
 # detour ------------------------------------------------------------------
 
-zero_boarding_alighting_vehicles_VMH<-data.table(zero_boarding_alighting_vehicles_VMH)
-
-merge.data.table(zero_boarding_alighting_vehicles_VMH,zero_b_a_vehicles,by = c("Transit_Day","Vehicle_ID"),all = T)
-
 VMH_Raw_90[Date == "2021-01-11" & Vehicle_ID == 1991]
 
-VMH_Raw[,.N,.(GPSStatus,CommStatus)]
+VMH_Raw[
+  , .N
+  , .(GPSStatus,CommStatus)
+]
 
 Vehicle_Message_History_raw_sample %>%
     filter(Transit_Day == "2021-01-11"
-         ,Vehicle_ID == 1991)
+           ,Vehicle_ID == 1991
+           )
 #fuck
 #investigate commstatus
 # "The communications status of this vehicle at this time.  Possible values are:
@@ -261,10 +282,10 @@ Vehicle_Message_History_raw_sample %>%
 
 #end detour
 
-VMH_Raw_90_no_zero <- VMH_Raw_90[!zero_b_a_vehicles, on = c("Transit_Day","Vehicle_ID")]
-
-
-
+VMH_Raw_90_no_zero <- VMH_Raw_90[ 
+  !zero_b_a_vehicles
+  , on = c("Transit_Day", "Vehicle_ID")
+]
 
 
 # check here
@@ -276,9 +297,9 @@ VMH_Raw_90_no_zero <- VMH_Raw_90[!zero_b_a_vehicles, on = c("Transit_Day","Vehic
 
 #get outliers
 VMH_Raw_90_no_zero[
-  ,.(Boards = sum(Boards)
+  , .(Boards = sum(Boards)
      ,Alights = sum(Alights))
-  ,.(Transit_Day,Vehicle_ID)
+  , .(Transit_Day,Vehicle_ID)
 ] %>%
   ggplot(aes(x=Boards)) +
   geom_histogram(binwidth = 1) +
@@ -428,9 +449,13 @@ VMH_Raw_test[
 
 # how many northbound trips have 
  
-VMH_Raw_90[,.N,AdHocTripNumber]
+VMH_Raw_90[,.N,AdHocTripNumber][order(-N)] %>% View()
 
-VMH_Raw_90[AdHocTripNumber == "12020020121061975"] %>% View()
+VMH_Raw_90[,.N,AdHocTripNumber][N > 375][order(-N)]
+
+VMH_Raw_90[AdHocTripNumber == "92020020901994"][order(data.table::as.ITime(Time))] %>% View()
+
+VMH_Raw_90[AdHocTripNumber == "1202002044561988"] %>%
   leaflet() %>%
   addCircles() %>%
   addTiles()
@@ -442,3 +467,4 @@ addTiles()
 
 VMH_Raw_test[Vehicle_ID == 1986 & Date == "2020-02-05"]
 
+new_dt <- old_dt[,new_column := "something"]
