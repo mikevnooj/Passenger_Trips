@@ -57,8 +57,12 @@ CALENDAR_raw <- tbl(con, "CALENDAR") %>%
 
 # get passenger counts
 
-PASSENGER_COUNT_query <- tbl(con, sql("SELECT CALENDAR_ID, ROUTE_ID, GEO_NODE_ID, ARRIVAL_TIME, DEPARTURE_LOAD,
-                                      BOARD, ALIGHT, VEHICLE_ID, TRIP_ID, ROUTE_DIRECTION_ID, BLOCK_STOP_ORDER
+PASSENGER_COUNT_query <- tbl(con, sql("SELECT CALENDAR_ID
+, ROUTE_ID
+, GEO_NODE_ID
+, ARRIVAL_TIME
+, DEPARTURE_LOAD,
+BOARD, ALIGHT, VEHICLE_ID, TRIP_ID, ROUTE_DIRECTION_ID, BLOCK_STOP_ORDER
                                       from PASSENGER_COUNT
                                       WHERE (CALENDAR_ID >= 120180101.0) and (CALENDAR_ID < 120190101.0)
                                       and PASSENGER_COUNT.TRIP_ID IS NOT NULL
