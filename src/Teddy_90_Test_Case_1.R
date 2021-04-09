@@ -196,10 +196,7 @@ garage_boundary <- -86.173321
 
 
 test_n_per_trip <- VMH_Raw_test[
-  Transit_Day == "2020-03-01"
-  ][Vehicle_ID %in% c(1899
-                      , 1979
-  )
+  Transit_Day == "2021-03-01"
   ][
     ,.(n_per_trip = .N)
     ,.(Trip
@@ -210,10 +207,7 @@ test_n_per_trip <- VMH_Raw_test[
 
 test_n_inside_bounds <- VMH_Raw_test[
   Latitude %between% c(south_lat_boundary,north_lat_boundary) & Longitude > garage_boundary][
-    Transit_Day == "2020-02-01"
-    ][Vehicle_ID %in% c(1899
-                        , 1979
-                        )
+    Transit_Day == "2021-03-01"
     ][
       , .(n_inside_boundaries = .N)
       , .(Trip
