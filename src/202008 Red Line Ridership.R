@@ -93,9 +93,9 @@ con <- DBI::dbConnect(odbc::odbc(), Driver = "SQL Server", Server = "REPSQLP01VW
 
 # ### --- Time --- ###
 
-this_month_Avail <- lubridate::floor_date(Sys.Date(), unit = "month")
+this_month_Avail <- lubridate::floor_date(Sys.Date()-365, unit = "month") #remove these when done
 
-last_month_Avail  <- lubridate::floor_date((lubridate::floor_date(Sys.Date(),
+last_month_Avail  <- lubridate::floor_date((lubridate::floor_date(Sys.Date()-365, #remove these when done
                                                                   unit = "month") - 1),
                                            unit = "month")
 
