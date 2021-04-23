@@ -87,15 +87,15 @@ library(timeDate)
 
 ### --- Database Connections --- ####
 
-con <- DBI::dbConnect(odbc::odbc(), Driver = "SQL Server", Server = "REPSQLP01VW", 
+con <- DBI::dbConnect(odbc::odbc(), Driver = "SQL Server", Server = "REPSQLP01VW\\REPSQLP02", 
                       Database = "TransitAuthority_IndyGo_Reporting", 
                       Port = 1433)
 
 # ### --- Time --- ###
 
-this_month_Avail <- lubridate::floor_date(Sys.Date()-365, unit = "month") #remove these when done
+this_month_Avail <- lubridate::floor_date(Sys.Date(), unit = "month") #remove these when done
 
-last_month_Avail  <- lubridate::floor_date((lubridate::floor_date(Sys.Date()-365, #remove these when done
+last_month_Avail  <- lubridate::floor_date((lubridate::floor_date(Sys.Date(), #remove these when done
                                                                   unit = "month") - 1),
                                            unit = "month")
 
@@ -462,6 +462,9 @@ high_end_wacky_apc_vehicles_reiterated <- Vehicle_Message_History_raw_sample %>%
 
 high_end_wacky_apc_vehicles_reiterated
 
+setDT(Vehicle_Message_History_raw_sample)
+  Vehicle_Message_History_raw_sample[Transit_Day == "2021-03-09" & Vehicle_ID == 1984][,.N,.(Alights,Stop_Name)][order(Stop_Name,Alights)]
+
 # Vehicle_Message_History_raw_sample_no_zero_boardings %>% 
 #   group_by(Transit_Day, Vehicle_ID) %>%
 #   summarise(Boardings = sum(Boards),
@@ -475,6 +478,8 @@ high_end_wacky_apc_vehicles_reiterated
 Vehicle_Message_History_raw_sample_clean <- Vehicle_Message_History_raw_sample %>%
   anti_join(zero_boarding_alighting_vehicles_VMH, by = c("Transit_Day", "Vehicle_ID")) %>%
   anti_join(high_end_wacky_apc_vehicles_reiterated , by = c("Transit_Day", "Vehicle_ID"))
+
+
 
 # # now build dataset of invalid data -- Option 3 (see above) AND Option 4 (see above) AND Option 5
 # 
@@ -515,7 +520,7 @@ invalid_df <- Vehicle_Message_History_raw_sample_invalid  %>% # invalid data
   summarise(Invalid_Boardings = sum(Boards),
             Invalid_Trips = n_distinct(AdHocUniqueTripNumber))
 
-invalid_df %>% view()
+#invalid_df %>% view()
 
 August_results <- left_join(valid_df, invalid_df,
                            by = c("Inbound_Outbound", "Trip_Start_Hour", "Service_Type")) %>%
@@ -526,8 +531,11 @@ August_results <- left_join(valid_df, invalid_df,
   mutate(Expanded_boardings = Boardings_to_add + Valid_Boardings)  %>%
   mutate(Percent_Invalid_Trips  = Invalid_Trips / (Invalid_Trips + Valid_Trips))
 
+Vehicle_Message_History_raw_sample[Route == 90, sum(Boards)]
+
+
 sum(invalid_df$Invalid_Trips)
-valid_df %>% view()
+#valid_df %>% view()
 sum(valid_df$Valid_Trips)
 
 # to get RL ridership: 
@@ -587,6 +595,26 @@ August_total_ridership
 
 
 
+# wtf ---------------------------------------------------------------------
+library(data.table)
+
+setDT(Vehicle_Message_History_raw_sample)
+
+Vehicle_Message_History_raw_sample[Route == 90 & Vehicle_ID == 1984, sum(Boards),Transit_Day]
+
+
+
+Vehicle_Message_History_raw_sample[Route == 90 & 
+                                     Vehicle_ID == 1984 & 
+                                     Transit_Day == "2021-03-09" 
+                                   & !Stop_Name %in% c("Virg&WoodlawnNB","Virg&MerrillNB","DTC-G"),sum(Boards)]
+
+Vehicle_Message_History_raw_sample[Route == 90 & 
+                                     Vehicle_ID == 1984][,uniqueN(Avl_History_Id)]
+
+
+
+
 ## extra
 
 # map it. (a sample)
@@ -603,3 +631,140 @@ map <- leaflet(sample_n(Vehicle_Message_History_raw_sample_clean, 1000)) %>%
              lng = ~Longitude)
 
 map # looks OK!
+
+
+
+# remove small N trips ----------------------------------------------------
+
+Vehicle_Message_History_raw_sample[ 
+  , adhoc_n := .N
+  , AdHocUniqueTripNumber
+  ]
+
+Vehicle_Message_History_raw_sample[ ,
+                                    test_adhoc := str_c(
+                                      str_c(
+                                        str_remove_all(Transit_Day,"-")
+                                        ,Trip
+                                        ,Vehicle_ID
+                                      )
+                                    )]
+
+Vehicle_Message_History_raw_sample[,test_n := .N,test_adhoc]
+
+Vehicle_Message_History_n_cleaned <- Vehicle_Message_History_raw_sample[adhoc_n > 90]
+
+Vehicle_Message_History_raw_sample_clean <- Vehicle_Message_History_n_cleaned %>%
+  anti_join(zero_boarding_alighting_vehicles_VMH, by = c("Transit_Day", "Vehicle_ID")) %>%
+  anti_join(high_end_wacky_apc_vehicles_reiterated , by = c("Transit_Day", "Vehicle_ID"))
+
+
+
+# # now build dataset of invalid data -- Option 3 (see above) AND Option 4 (see above) AND Option 5
+# 
+Vehicle_Message_History_raw_sample_invalid <- Vehicle_Message_History_n_cleaned %>%
+  anti_join(Vehicle_Message_History_raw_sample_clean)
+
+
+# now let's do the expansion method...
+
+valid_df <- Vehicle_Message_History_raw_sample_clean %>% # valid data
+  group_by(AdHocUniqueTripNumber) %>%
+  arrange(seconds_since_midnight) %>%
+  mutate(Trip_Start_Hour = first(Clock_Hour)) %>%
+  arrange(AdHocUniqueTripNumber, seconds_since_midnight) %>%
+  group_by(Inbound_Outbound, Trip_Start_Hour, Service_Type) %>%
+  summarise(Valid_Boardings = sum(Boards),
+            Valid_Trips = n_distinct(AdHocUniqueTripNumber)) 
+
+# valid_pass_throughs <- Vehicle_Message_History_raw_sample_clean %>% # valid data for pass-throughs
+#   group_by(AdHocUniqueTripNumber) %>%
+#   arrange(seconds_since_midnight) %>%
+#   mutate(Trip_Start_Hour = first(Clock_Hour)) %>%
+#   mutate(First_Onboard_Count = first(Onboard),
+#          First_Boarding = first(Boards),
+#          First_Alighting = first(Alights),
+#          Starting_Pass_Through = first(Onboard) - first(Boards) + first(Alights)) %>%
+#   group_by(Inbound_Outbound, Trip_Start_Hour, Service_Type, AdHocUniqueTripNumber) %>%
+#   summarise(Starting_Pass_Through_grouped = first(Starting_Pass_Through)) %>%
+#   group_by(Inbound_Outbound, Trip_Start_Hour, Service_Type) %>%
+#   summarise(Starting_Pass_Through_to_add = sum(Starting_Pass_Through_grouped))
+
+invalid_df <- Vehicle_Message_History_raw_sample_invalid  %>% # invalid data
+  group_by(AdHocUniqueTripNumber) %>%
+  arrange(seconds_since_midnight) %>%
+  mutate(Trip_Start_Hour = first(Clock_Hour)) %>%
+  arrange(AdHocUniqueTripNumber, seconds_since_midnight) %>%
+  group_by(Inbound_Outbound, Trip_Start_Hour, Service_Type) %>%
+  summarise(Invalid_Boardings = sum(Boards),
+            Invalid_Trips = n_distinct(AdHocUniqueTripNumber))
+
+#invalid_df %>% view()
+
+August_results <- left_join(valid_df, invalid_df,
+                            by = c("Inbound_Outbound", "Trip_Start_Hour", "Service_Type")) %>%
+  mutate(Boardings_per_valid_trip = (Valid_Boardings) / Valid_Trips) %>%
+  mutate(Boardings_to_add = ifelse(!is.na(Invalid_Trips),
+                                   Invalid_Trips * Boardings_per_valid_trip,
+                                   0)) %>%
+  mutate(Expanded_boardings = Boardings_to_add + Valid_Boardings)  %>%
+  mutate(Percent_Invalid_Trips  = Invalid_Trips / (Invalid_Trips + Valid_Trips))
+
+sum(invalid_df$Invalid_Trips)
+#valid_df %>% view()
+sum(valid_df$Valid_Trips)
+
+# to get RL ridership: 
+
+sum(August_results$Expanded_boardings, na.rm = TRUE)
+
+sum(August_results$Valid_Trips, na.rm = TRUE)
+sum(August_results$Invalid_Trips, na.rm = TRUE)
+
+sum(August_results$Valid_Trips, na.rm = TRUE)/ (sum(August_results$Valid_Trips, na.rm = TRUE) + sum(August_results$Invalid_Trips, na.rm = TRUE))
+
+# what is raw sum?
+
+sum(Vehicle_Message_History_raw_sample_clean$Boards)
+
+# what is raw sum from unattributed stops?
+
+Vehicle_Message_History_raw_sample_clean %>%
+  filter(Stop_Id == 0) %$%
+  sum(Boards) # 
+
+##### boardings by service type ####
+
+Service_Day_Set <- Vehicle_Message_History_raw_sample  %>%
+  group_by(Service_Type) %>%
+  summarise(Service_Days_in_Month = n_distinct(Transit_Day)) # 
+
+# research this issue:
+
+Vehicle_Message_History_raw_sample_clean  %>%
+  group_by(Service_Type) %>%
+  summarise(Service_Days_in_Month = toString(unique(Transit_Day))) %>%
+  View() 
+# Now... how to join....
+
+August_results %>%
+  group_by(Service_Type) %>%
+  summarise(Total_Boardings = sum(Expanded_boardings)) %>%
+  left_join(Service_Day_Set, by = "Service_Type") %>%
+  mutate(Average_Daily_Ridership = Total_Boardings / Service_Days_in_Month) %>%
+  mutate_if(is.numeric, round, 0) %>%
+  formattable::formattable()
+
+August_service_summary <- August_results %>%
+  group_by(Service_Type) %>%
+  summarise(Total_Boardings = sum(Expanded_boardings)) %>%
+  left_join(Service_Day_Set, by = "Service_Type") %>%
+  mutate(Average_Daily_Ridership = Total_Boardings / Service_Days_in_Month) %>%
+  mutate_if(is.numeric, round, 0) %>%
+  gt::gt()
+
+August_total_ridership <- round(sum(August_results$Expanded_boardings, na.rm = TRUE), 0)
+
+August_service_summary
+
+August_total_ridership
