@@ -27,7 +27,7 @@ last_month_Avail  <- lubridate::floor_date(lubridate::floor_date(Sys.Date()
                                            ,unit = "month"
                                            )#end floor_date
 
-month <- "2021-03-01"
+month <- "2021-04-01"
 
 this_month_Avail <- lubridate::floor_date(x = lubridate::as_date(month)
                                          , unit = "month"
@@ -335,7 +335,9 @@ VMH_Raw_90_no_zero[
     ,.(Transit_Day,Vehicle_ID)
     ][
       ,pct_diff := (Boardings - Alightings)/ ((Boardings + Alightings)/2)
-      ][] %>% View()
+      ][]
+
+
 
 #get clean vmh
 VMH_90_clean <- VMH_Raw_90[
@@ -435,166 +437,45 @@ fwrite(invalid_dt_xuehao
 
 # combine all the csvs for stat support -----------------------------------
 
-files <- paste0("data//"
-                , list.files("data//"
+files <- paste0("data//processed//VMH_90_Valid_Invalid//"
+                , list.files("data//processed//VMH_90_Valid_Invalid"
                              , pattern = "trips.csv"
-                             )
                 )
+)
+
+
 
 read_plus <- function(file){
   fread(file) %>%
-    mutate(valid_invalid = strsplit(file,"_")[[1]][2])
+    mutate(valid_invalid = strsplit(file,"_")[[1]][5])
 }
 
-
-trips_data <- files %>%
+apc_trips_data <- files %>%
   purrr::map_df(~read_plus(.))
 
-fwrite(trips_data,"data//FY2020_trips_data.csv")
-trips_data[,.N,.(Inbound_Outbound,valid_invalid)]
-trips_data[valid_invalid == "invalid"]
-trips_data[valid_invalid == "valid"]
 
 
+fwrite(apc_trips_data[Transit_Day < "2021-01-01"
+                  ][order(Transit_Day)]
+       , "data//processed//FY2020_apc_trips_data.csv"
+       )
 
-trips_operated <- fread("data//90_Trips_Operated_2020.csv")
 
-trips_operated[,Transit_Day := mdy(Date)]
+# get trips operated ------------------------------------------------------
 
+trips_operated_raw <- fread("data//raw//90_Trips_Operated_Raw.csv")
 
-operated <- trips_operated[`In-S` == "TRUE" & Cancelled == "FALSE" & Type != "Deadhead" & From != To][,.N,Transit_Day][order(Transit_Day)]
+trips_operated_raw <- fread("data//raw//90_Trips_Operated_202104.csv")
 
-apc <- trips_data[Transit_Day < "2021-01-01",.N,Transit_Day][order(Transit_Day)]
+trips_operated <- trips_operated_raw[`In-S` == "TRUE" & Cancelled == "FALSE"]
 
-merge.data.table(operated,apc,by = "Transit_Day",suffixes = c("operated","apc"))[,missingapc := Noperated - Napc][,sum(N)]
+trips_operated[,From_To := paste0(From,To)]
 
-apc_month <- 1
-
-cbind(trips_data[Transit_Day < "2021-01-01", .N, .(month(Transit_Day),Service_Type)][order(-Service_Type)]
-,trips_operated[`In-S` == "TRUE" & 
-                  Cancelled == "FALSE" & 
-                  Type != "Deadhead" &
-                  From != To][, .(operated = .N)
-                              , .(month(Transit_Day)
-                                  , SchType
-                                  )
-                              ][order(-SchType)]
-)[,diff := operated - N][]
-
-trips_operated[`In-S` == "TRUE" & 
-                 Cancelled == "FALSE" & 
-                 Type != "Deadhead" &
-                 From != To
+trips_operated[From != To
+               , .N
+               , From_To
                ]
 
-
-# unfuck this situation ---------------------------------------------------
-
-con_rep <- DBI::dbConnect(odbc::odbc(), Driver = "SQL Server", Server = "REPSQLP01VW\\REPSQLP01", 
-                          Database = "TransitAuthority_IndyGo_Reporting", 
-                          Port = 1433)
-
-tbl(con_rep
-    ,sql("Select top 10 * from
-    avl.vVehicle_History
-    where Time > '20200101'
-         and Time <= '20200102'"
-         )
-    )
-
-
-
-trip_info_active <-tbl(con_rep
-                       ,"vTrip_Info_Active"
-                       ) %>%
-  collect() %>%
-  data.table() 
-
-trip_info_deleted <- tbl(con_rep
-                         ,"vTrip_Info_Deleted"
-                         ) %>%
-  collect() %>%
-  data.table()
-
-trip_info_prev <- tbl(con_rep
-                      ,"vTrip_Info_Prev"
-                      ) %>%
-  collect() %>%
-  data.table()
-
-trip_info_working <- tbl(con_rep
-                         ,"vTrip_Info_Working"
-                         ) %>%
-  collect() %>%
-  data.table()
-
-trip_info <- rbind(
-  trip_info_prev
-  ,trip_info_deleted
-  ,trip_info_prev
-  ,trip_info_working
-)
-
-trip_info <- tbl(con_rep
-                 ,"Trip_Info_Edits"
-                 ) %>%
-  collect() %>%
-  data.table()
-
-
-trips_operated <- fread("data//90_Trips_Operated_Raw.csv")
-
-trips_operated <- trips_operated[`In-S` == "TRUE" & Cancelled == "FALSE"]
-
-trip_info[External_Identifier %like% trips_operated$`Internal trp number`]
-
-
-
-trips_operated[,.N,`Internal trp number`]
-
-
-
-trips_operated[,uniqueN(`Internal trp number`)]
-
-
-trip_info[,External_Identifier]
-trip_info[str_length(External_Identifier) > 7]
-
-trips_operated[str_length(`Internal trp number`) > 7]
-
-x <- tbl(con_rep
-         ,"vSchedule_Data_Attributes_Active"
-         ) %>%
-  collect() %>%
-  data.table()
-
-x[Type == "trip_info",.N,Name
-  ]
-
-
-x <- tbl(con_dw
-         ,"DimTrip"
-         ) %>%
-  collect() %>%
-  data.table()
-
-x[,.N,TripNumber][TripInternalNumber %in% trips_operated[,unique(`Internal trp number`)]]
-trips_operated[,.N,`Internal trp number`]
-
-# -------------------------------------------------------------------------
-# 64029 is apc trips
-# 65360 is what i originally sent xuehao
-
-trips_operated[,.N,.(From,To)]
-trips_operated[From != To,.N,.(From,To)]
-#bad combos
-#from 96C to COLL66
-#from MAE to UOI
-#from GP to MAE
-#from GP to UOI
-#from UOI to GP
-#from MAE to GP
-trips_operated[,From_To := paste0(From,To)]
 
 bad_combos <- c("96CCOLL66"
                 ,"MAEUOI"
@@ -622,26 +503,21 @@ northbound <- c("M38COLL66"
                 , "DTC-G96C"
                 , "M3896C")
 
-trips_operated_90[!From_To %in% northbound][,.N,From_To]
-
-#direction
-trips_operated_90[,Inbound_Outbound := fifelse(From_To %in% northbound
-                                               , 0
-                                               , 1
-                                               )
+trips_operated_90[, Inbound_Outbound := fifelse(From_To %in% northbound
+                                                , 0
+                                                , 1
+                                                )
                   ]
-#trip start hour
-trips_operated_90[,time := NULL]
-trips_operated_90[,aorp := NULL]
-trips_operated_90[,Transit_Day := NULL]
-trips_operated_90[,DateTest := NULL]
-trips_operated_90[,service_type := NULL]
-trips_operated_90[,trip_start_hour := NULL]
-trips_operated_90[,trip_start_test := NULL]
-trips_operated_90[,trip_start_hour_test := NULL]
 
-#okay we need to fix this ap thing god dammit
-#x is midnight hour
+
+# good check
+trips_operated_90[
+  , .N
+  , .(Inbound_Outbound
+      , From_To
+      )
+  ][order(Inbound_Outbound)
+    ]
 
 trips_operated_90[, c("time","aorp") := tstrsplit(trips_operated_90$Start,"[a,p,x,;]")]
 
@@ -650,13 +526,15 @@ trips_operated_90[,aorp := fifelse(Start %like% "p"
                                    ,"a"
                                    )
                   ][, time := as.integer(time)
-                    ][,time := fifelse(Start %like% "p" & time < 1200 | Start %like% "x"
-                                       , time + 1200
-                                       , time
-                                       , 0)
-                      ][,time := fifelse(time > 2359
-                                         ,time - 2400
-                                         ,time)
+                    ][, time := fifelse(Start %like% "p" & time < 1200 | Start %like% "x"
+                                                             , time + 1200
+                                        , time
+                                        , 0
+                                        )
+                      ][, time := fifelse(time > 2359
+                                          ,time - 2400
+                                          ,time
+                                          )
                         ][, time := as.ITime(strptime(sprintf('%04d'
                                                               , time
                                                               )
@@ -666,178 +544,329 @@ trips_operated_90[,aorp := fifelse(Start %like% "p"
                           ][, aorp := NULL
                             ]
 
-
-
-
-#okay it is transit day compliant
-trips_operated_90
-
 trips_operated_90[
-  ,service_type := fcase(as.IDate(mdy(Date)) %in% as.IDate(holidays_saturday@Data)
-                         , "Saturday"
-                         , as.IDate(mdy(Date)) %in% as.IDate(holidays_sunday@Data)
-                         , "Sunday"
-                         , weekdays(as.IDate(mdy(Date))) %in% c("Monday"
-                                                                , "Tuesday"
-                                                                , "Wednesday"
-                                                                , "Thursday"
-                                                                , "Friday"
-                                                                )#end c
-                         , "Weekday"
-                         , weekdays(as.IDate(mdy(Date))) == "Saturday"
-                         , "Saturday"
-                         , weekdays(as.IDate(mdy(Date))) == "Sunday"
-                         , "Sunday"
-                         )#end fcase 
+  , service_type := fcase(as.IDate(mdy(Date)) %in% as.IDate(holidays_saturday@Data)
+                          , "Saturday"
+                          , as.IDate(mdy(Date)) %in% as.IDate(holidays_sunday@Data)
+                          , "Sunday"
+                          , weekdays(as.IDate(mdy(Date))) %in% c("Monday"
+                                                                 , "Tuesday"
+                                                                 , "Wednesday"
+                                                                 , "Thursday"
+                                                                 , "Friday"
+                                                                 )#end c
+                          , "Weekday"
+                          , weekdays(as.IDate(mdy(Date))) == "Saturday"
+                          , "Saturday"
+                          , weekdays(as.IDate(mdy(Date))) == "Sunday"
+                          , "Sunday"
+                          )#end fcase 
   ]
 
-
 trips_operated_90[
-  , AdHocTripNumber := str_c(
-    Inbound_Outbound
-    ,str_remove_all(as.IDate(mdy(Date)),"-")
-    ,`Internal trp number`
-    )
+  , AdHocTripNumber := str_c(Inbound_Outbound
+                             , str_remove_all(as.IDate(mdy(Date)),"-")
+                             , `Internal trp number`
+                             )
   ]
 
-trips_operated_90[,trip_start_hour := data.table::hour(time)
-                  ][,Transit_Day := as.IDate(mdy(Date))
-                    ]
+trips_operated_90[, trip_start_hour := data.table::hour(time)
+                  ][, Transit_Day := as.IDate(mdy(Date))
+                    ][, trip_start_hour := fifelse(trip_start_hour == 4
+                                                   , 5
+                                                   , trip_start_hour
+                                                   )
+                      ]
 
-cbind(trips_operated_90[,.(operatedN=.N),.(trip_start_hour)][order(trip_start_hour)]
-      , trips_data[trip_start_hour != 1,.N,.(trip_start_hour)][order(trip_start_hour)]
-      )[,diff := operatedN - N][]
+
+# begin the expansion -----------------------------------------------------
+
+# first get averages by type and hour and direction
 
 
+apc_trips_valid <- apc_trips_data[!apc_trips_data[Transit_Day <= "2020-01-31" & 
+                                                    Boards > 757 | 
+                                                    Transit_Day %between% c("2020-02-01"
+                                                                            , "2020-02-29"
+                                                                            ) & 
+                                                    Boards > 1000                                                   
+                                                  ]
+                                  , on = c("AdHocTripNumber")
+                                  #][Transit_Day >= "2021-01-01"
+                                    ][Inbound_Outbound != 9 &
+                                        Inbound_Outbound != 14
+                                      ][, trip_start_hour := fifelse(trip_start_hour == 4
+                                                                     , 5
+                                                                     , trip_start_hour
+                                                                     )
+                                        ]
 
-trips_operated_90[,trip_start_test := fifelse(From %in% c("96C","MAE","GP") & 
-                                                data.table::minute(time) < 24 &
-                                                time 
-                                              , abs(time - 1*60*60)
-                                              , time
-                                              )
-                  ][,trip_start_hour_test := data.table::hour(trip_start_test)][]
+apc_boardings_by_stratum <- apc_trips_valid[valid_invalid == "valid"
+                                             ,.(boards = sum(Boards)
+                                                , trips = .N
+                                             )
+                                             ,.(trip_start_hour
+                                                , Service_Type
+                                                , Inbound_Outbound              
+                                             )
+                                             ][,avg_boardings := boards/trips
+                                               ][order(Inbound_Outbound
+                                                       , -Service_Type
+                                                       , trip_start_hour
+                                                       )
+                                                 ]
 
-cbind(trips_operated_90[,.(operatedN=.N),trip_start_hour_test][order(trip_start_hour_test)]
-      , trips_data[trip_start_hour != 1,.N,.(trip_start_hour)][order(trip_start_hour)]
-      )[,diff := operatedN - N][]
 
-merge.data.table(trips_data[,.N,.(Transit_Day,Service_Type,trip_start_hour)][order(Transit_Day,trip_start_hour)]
-                 , trips_operated_90[,.N,.(Transit_Day,service_type,trip_start_hour_test)][order(Transit_Day,trip_start_hour_test)]
-                 ,by.x = c("Transit_Day"
-                           ,"trip_start_hour"
+trips_operated_per_stratum <- trips_operated_90[
+  , .(trips_operated = .N) 
+  , .(trip_start_hour
+      , service_type
+      , Inbound_Outbound
+  )
+  ][order(Inbound_Outbound
+          , -service_type
+          , trip_start_hour
+          )
+    ]
+
+expanded_operated_trips <- merge.data.table(trips_operated_per_stratum
+                                            , apc_boardings_by_stratum
+                                            , by.x = c("service_type"
+                                                       , "trip_start_hour"
+                                                       , "Inbound_Outbound"
+                                                       )
+                                            , by.y = c("Service_Type"
+                                                       , "trip_start_hour"
+                                                       , "Inbound_Outbound"
+                                                       )
+                                            , all = TRUE
+                                            )[, final_boardings := trips_operated * avg_boardings
+                                              ][order(Inbound_Outbound
+                                                      , -service_type
+                                                      , trip_start_hour
+                                                      )
+                                                ][,sum(final_boardings,na.rm = TRUE)][]
+
+
+# function development ----------------------------------------------------
+
+
+month_end <- as.IDate("2021-01-31")
+
+month_number <- month(month_end)
+
+#month_number == 1
+
+apc_boardings_by_stratum <- apc_trips_valid[valid_invalid == "valid" & Transit_Day <= month_end
+                                            , .(boards = sum(Boards)
+                                                , trips = .N
+                                                )
+                                            , .(trip_start_hour
+                                                , Service_Type
+                                                , Inbound_Outbound              
+                                                )
+                                            ][, avg_boardings := boards/trips
+                                              ][order(Inbound_Outbound
+                                                      , -Service_Type
+                                                      , trip_start_hour
+                                                      )
+                                                ]
+
+trips_operated_per_stratum <- trips_operated_90[Transit_Day <= month_end
+  , .(trips_operated = .N) 
+  , .(trip_start_hour
+      , service_type
+      , Inbound_Outbound
+      )
+  ][order(Inbound_Outbound
+          , -service_type
+          , trip_start_hour
+          )
+    ]
+
+expanded_operated_trips <-merge.data.table(trips_operated_per_stratum
+                 , apc_boardings_by_stratum
+                 , by.x = c("service_type"
+                            , "trip_start_hour"
+                            , "Inbound_Outbound"
+                            )
+                 , by.y = c("Service_Type"
+                            , "trip_start_hour"
+                            , "Inbound_Outbound"
+                            )
+                 , all = TRUE
+                 )[, final_boardings := trips_operated * avg_boardings
+                   ][order(Inbound_Outbound
+                           , -service_type
+                           , trip_start_hour
                            )
-                 ,by.y = c("Transit_Day"
-                           ,"trip_start_hour_test"
-                           )
-                 ,suffixes = c("_apc"
-                               ,"_operated"
+                     ][,trip_start_hour := fifelse(is.na(trips_operated)
+                                                   ,trip_start_hour + 1
+                                                   ,trip_start_hour
+                                                   )
+                       ][,`:=`(trips_operated = sum(trips_operated,na.rm = TRUE)
+                               , boards = sum(boards,na.rm = TRUE)
+                               , trips = sum(trips,na.rm = TRUE)
                                )
-                 ,all = TRUE
-                 )
+                         ,.(service_type
+                            , trip_start_hour
+                            , Inbound_Outbound
+                            ,trip_start_hour
+                            )
+                         ][,avg_boardings := boards/trips
+                           ][,final_boardings := trips_operated * avg_boardings]
 
 
-# 1 is southbound
-# 0 in northbound
+#get service table
+service_table <- trips_operated_90[Transit_Day <= month_end][,.(service_days_in_month = uniqueN(Transit_Day)),service_type]
 
-#do transit_day
-#
+month_summary <- expanded_operated_trips[, .(boardings = sum(final_boardings,na.rm = TRUE))
+                                         , service_type
+                                         ][service_table,on = "service_type"
+                                           ][,`:=` (boardings = round(boardings)
+                                                    , average_daily_boardings = round(boardings/service_days_in_month)
+                                                    )
+                                             ][]
 
-FY2020_90_trips_operated <- trips_operated_90[,.(AdHocTripNumber
-                                                 , Transit_Day
-                                                 , Inbound_Outbound
-                                                 , trip_start_hour
-                                                 , service_type)
-                                              ][]
+fwrite(month_summary
+       , paste0("data//output//Route_90_Expanded//"
+                , format(month_end
+                         , "%Y%m"
+                         )
+                ,"_summary.csv"
+                )
+       )
 
-fwrite(FY2020_90_trips_operated,"data//FY2020_90_trips_operated.csv")
+ytd_month_summary <- expanded_operated_trips[, .(boardings = sum(final_boardings,na.rm = TRUE))
+                                             , service_type
+                                             ][service_table,on = "service_type"
+                                               ][,`:=` (boardings = boardings
+                                                        , average_daily_boardings = boardings/service_days_in_month
+                                               )
+                                               ][]
 
-fread("data//trips_operated_90.csv")
-
-merge.data.table(trips_operated_90[trip_start_hour == 4
-                                   , .(operatedN=.N)
-                                   , .(trip_start_hour,Inbound_Outbound,Transit_Day)
-                                   ][order(trip_start_hour,Inbound_Outbound)
-                                     ]
-                 , trips_data[Inbound_Outbound != 9 & Inbound_Outbound != 14 & trip_start_hour != 1 & valid_invalid == "valid"
-                              ,.(apcN = .N)
-                              , .(trip_start_hour,Inbound_Outbound,Transit_Day)
-                              ][order(trip_start_hour,Inbound_Outbound)
-                                ]
-                 , by = c("trip_start_hour","Inbound_Outbound","Transit_Day")
-                 , aall = TRUE
-                 )[,diff := operatedN - apcN][]
-
-
-trips_operated_90[trip_start_hour == 5][order(time)]
-
-
-trips_data <- trips_data[Transit_Day < as.IDate("2021-01-01") & Inbound_Outbound != 14 & Inbound_Outbound != 9]
-
-trips_data[,.N,trip_start_hour]
-
-trips_data[,trip_start_hour := fifelse(trip_start_hour == 1
-                                       ,0
-                                       ,trip_start_hour)]
+fwrite(ytd_month_summary
+       , paste0("data//processed//Route_90_Expanded//"
+                , format(month_end
+                         , "%Y%m"
+                         )
+                ,"_ytd_month_summary.csv"
+                )
+       )
 
 
-
-trips_operated_90[Transit_Day <= "2020-01-31"
-                  ][, .N
-                    , .(Inbound_Outbound
-                        , service_type
-                        , trip_start_hour
-                        )
-                    ]
+# second section function dev ---------------------------------------------
 
 
-trips_data[valid_invalid == "valid",sum(Boards),.(trip_start_hour,Service_Type,Inbound_Outbound)][order(-Service_Type,trip_start_hour,Inbound_Outbound)]
+month_end <- as.IDate("2021-04-30")
+
+month_number <- month(month_end)
 
 
-
-# okay so first we need averages by hour and type for the whole ye --------
-# 
-# 
-trips_data_valid <- trips_data[!trips_data[Transit_Day <= "2020-01-31" & Boards > 757 | Transit_Day %between% c("2020-02-01","2020-02-29") & Boards > 1000],on = c("AdHocTripNumber")]
+#month_number > 1
+prev_month_end <- month_end - lubridate::days_in_month(month_end)
 
 
-avg_boardings_by_stratum <- trips_data_valid[valid_invalid == "valid" #& Transit_Day <= as.IDate("2020-01-31")
-                                       ,.(boards = sum(Boards)
-                                          , trips = .N
-                                          )
-                                       ,.(trip_start_hour
-                                          , Service_Type
-                                          , Inbound_Outbound              
-                                          )
-                                       ][,avg_boardings := boards/trips
+apc_boardings_by_stratum <- apc_trips_valid[valid_invalid == "valid" & Transit_Day <= month_end
+                                            , .(boards = sum(Boards)
+                                                , trips = .N
+                                            )
+                                            , .(trip_start_hour
+                                                , Service_Type
+                                                , Inbound_Outbound              
+                                            )
+                                            ][, avg_boardings := boards/trips
+                                              ][order(Inbound_Outbound
+                                                      , -Service_Type
+                                                      , trip_start_hour
+                                              )
+                                              ]
+
+trips_operated_per_stratum <- trips_operated_90[Transit_Day <= month_end
+                                                , .(trips_operated = .N) 
+                                                , .(trip_start_hour
+                                                    , service_type
+                                                    , Inbound_Outbound
+                                                )
+                                                ][order(Inbound_Outbound
+                                                        , -service_type
+                                                        , trip_start_hour
+                                                )
+                                                ]
+
+expanded_operated_trips <- merge.data.table(trips_operated_per_stratum
+                                            , apc_boardings_by_stratum
+                                            , by.x = c("service_type"
+                                                       , "trip_start_hour"
+                                                       , "Inbound_Outbound"
+                                                       )
+                                            , by.y = c("Service_Type"
+                                                       , "trip_start_hour"
+                                                       , "Inbound_Outbound"
+                                                       )
+                                            , all = TRUE
+                                            )[, final_boardings := trips_operated * avg_boardings
+                                              ][order(Inbound_Outbound
+                                                      , -service_type
+                                                      , trip_start_hour
+                                                      )
+                                                ][,trip_start_hour := fifelse(is.na(trips_operated)
+                                                                              ,trip_start_hour + 1
+                                                                              ,trip_start_hour
+                                                                              )
+                                                  ][,`:=`(trips_operated = sum(trips_operated,na.rm = TRUE)
+                                                          , boards = sum(boards,na.rm = TRUE)
+                                                          , trips = sum(trips,na.rm = TRUE)
+                                                          )
+                                                    ,.(service_type
+                                                       , trip_start_hour
+                                                       , Inbound_Outbound
+                                                       ,trip_start_hour
+                                                       )
+                                                    ][,avg_boardings := boards/trips
+                                                      ][,final_boardings := trips_operated * avg_boardings]
+
+
+#get service table
+service_table <- trips_operated_90[Transit_Day <= month_end & Transit_Day > prev_month_end][,.(service_days_in_month = uniqueN(Transit_Day)),service_type]
+
+ytd_month_summary <- expanded_operated_trips[, .(boardings = sum(final_boardings))
+                                         , service_type
                                          ]
 
-trips_operated_per_stratum_january <- FY2020_90_trips_operated[#Transit_Day <= as.IDate("2020-01-31")
-                                                        , .(trips_operated = .N) 
-                                                        , .(trip_start_hour
-                                                            , service_type
-                                                            , Inbound_Outbound
-                                                            )
-                                                        ][order(Inbound_Outbound, -service_type,trip_start_hour)] %>% View()
-
-merge.data.table(trips_operated_per_stratum_january
-                 , avg_boardings_by_stratum
-                 , by.x = c("service_type"
-                          , "trip_start_hour"
-                          , "Inbound_Outbound"
+prev_ytd_summary <- fread(paste0("data//processed//Route_90_Expanded//"
+                                 , format(prev_month_end
+                                          , "%Y%m"
+                                          )
+                                 , "_ytd_month_summary.csv"
+                                 )
                           )
-                 ,by.y = c("Service_Type"
-                           , "trip_start_hour"
-                           , "Inbound_Outbound"
-                           )
-                 ,all = TRUE
-                 )[,final_boardings := trips_operated * avg_boardings
-                   ][order(Inbound_Outbound,-service_type,trip_start_hour)] %>% View()
 
+month_summary <- prev_ytd_summary[ytd_month_summary,on = "service_type"
+                                  ][, month_boardings := i.boardings - boardings
+                                    ][ ,.(service_type
+                                          , boardings = month_boardings
+                                          )
+                                       ][service_table,on = "service_type"
+                                         ][,`:=` (boardings = round(boardings)
+                                                  , average_daily_boardings = round(boardings/service_days_in_month)
+                                                  )
+                                           ][]
 
+fwrite(month_summary
+       , paste0("data//output//Route_90_Expanded//"
+                , format(month_end
+                         , "%Y%m"
+                         )
+                ,"_summary.csv"
+                )
+       )
 
-
-
-[,sum(final_boardings)
-                     ]
-
+fwrite(ytd_month_summary
+       , paste0("data//processed//Route_90_Expanded//"
+                , format(month_end
+                         , "%Y%m"       
+                         )
+                , "_ytd_month_summary.csv"
+                )       
+       )

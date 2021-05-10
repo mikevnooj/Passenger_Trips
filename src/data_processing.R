@@ -1,10 +1,10 @@
-
-
-files <- paste0("data//"
-                , list.files("data//"
+files <- paste0("data//processed//VMH_90_Valid_Invalid"
+                , list.files("data//processed//VMH_90_Valid_Invalid"
                              , pattern = "trips.csv"
                 )
 )
+
+
 
 read_plus <- function(file){
   fread(file) %>%
