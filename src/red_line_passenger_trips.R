@@ -265,7 +265,7 @@ VMH_Raw_90_no_zero[
   , .(Transit_Day,Vehicle_ID)
 ] %>% 
   ggplot(aes(x=Boards)) +
-  geom_histogram(binwidth = 1) +
+  geom_histogram(binwidth = 1)# +
   stat_bin(binwidth = 1, geom = "text", aes(label = ..x..), vjust = -1.5)
 
 
@@ -870,3 +870,20 @@ fwrite(ytd_month_summary
                 , "_ytd_month_summary.csv"
                 )       
        )
+
+
+# trip comparo
+# 
+con_dw <- DBI::dbConnect(odbc::odbc(), Driver = "SQL Server", 
+                         Server = "AVAILDWHP01VW", Database = "DW_IndyGo", Port = 1433)
+
+DimTrip <- tbl(con_dw
+               ,"DimTrip"
+) %>%
+  collect() %>%
+  data.table()
+
+trips_operated_90[,.(unique(`Internal trp number`))][V1 %in% DimTrip$PermanentTripNumber] %>% left_join(trips_operated_90[,.(unique(`Internal trp number`))][V1 %in% DimTrip$TripExternalID])
+trips_operated_90[,.(unique(`Internal trp number`))][V1 %in% DimTrip$TripInternalNumber]
+
+DimTrip[is.na(TripInternalNumber)]

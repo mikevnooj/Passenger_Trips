@@ -9,13 +9,13 @@ DimServiceLevel <- tbl(con_DW,"DimServiceLevel") %>%
   collect() %>% 
   data.table(key = "ServiceLevelKey")
 
-DimDate_start_pre_cov_mpo <- tbl(con_DW, "DimDate") %>%
-  filter(CalendarDateChar == "09/14/2019") %>%
+DimDate_start_post_cov_mpo <- tbl(con_DW, "DimDate") %>%
+  filter(CalendarDateChar == "09/01/2019") %>%
   collect() %>% 
   setDT(key = "DateKey")
 
 DimDate_end_pre_cov_mpo <- tbl(con_DW, "DimDate") %>%
-  filter(CalendarDateChar == "03/14/2020") %>%
+  filter(CalendarDateChar == "03/13/2020") %>%
   collect() %>% 
   setDT(key = "DateKey")
 
@@ -46,7 +46,7 @@ DimRoute <- tbl(con_DW,"DimRoute") %>%
 FactFare <- tbl(con_DW, "FactFare") %>%
   filter(
     FareKey %in% c(1001, 1002),
-    DateKey >= local(DimDate_start_pre_cov_mpo$DateKey),
+    DateKey >= local(DimDate_start_post_cov_mpo$DateKey),
     DateKey <= local(DimDate_end_pre_cov_mpo$DateKey)
   ) %>% #end filter
   collect() %>% 
@@ -126,7 +126,9 @@ FF_no_zero <- FactFare_joined_weekday[!FF_joined_zero,on = c(DateKey = "DateKey"
 FF_joined_daily[!FF_joined_zero,on = c(DateKey = "DateKey",VehicleKey = "VehicleKey")] %>%
   ggplot(aes(x=Boarding)) +
   geom_histogram(binwidth = 1) +
-  stat_bin(binwidth = 1, geom = "text", aes(label = ..x..), vjust = -1.5)
+  stat_bin(binwidth = 1, geom = "text"
+           , aes(label = ..x..)
+           , vjust = -1.5)
 
 #okay, 500 is a good bet i think
 obvious_outlier <- 500
@@ -178,17 +180,26 @@ FF_clean <- FF_no_zero[
 
 
 #get daily sums by stopID
+# DailyStop <- FF_clean[
+#   #remove garage and 0
+#   StopID != 0 & StopID < 99000
+#   ,sum(FareCount)
+#   ,.(FareReportLabel,DateKey,StopID,RouteReportLabel)
+#   ]
+
 DailyStop <- FF_clean[
   #remove garage and 0
   StopID != 0 & StopID < 99000
   ,sum(FareCount)
-  ,.(FareReportLabel,DateKey,StopID,RouteReportLabel)
+  ,.(FareReportLabel,DateKey,StopID)
   ]
 
 #get total boards for each stop
-StopSums <- dcast(DailyStop[,sum(V1),.(StopID,FareReportLabel,RouteReportLabel)],
-                  StopID + RouteReportLabel ~ FareReportLabel)
+# StopSums <- dcast(DailyStop[,sum(V1),.(StopID,FareReportLabel,RouteReportLabel)],
+#                   StopID + RouteReportLabel ~ FareReportLabel)
 
+StopSums <- dcast(DailyStop[,sum(V1),.(StopID,FareReportLabel)],
+                  StopID ~ FareReportLabel)
 
 # get average daily boarding and alighting -------------------------------
 
@@ -208,6 +219,6 @@ Pre_Cov_summary <- merge.data.table(StopSums,FactFareDateCount,"StopID",all.x = 
     ]
 #write this when you're back
 
-fwrite(Pre_Cov_summary,"data//NN_2019_2020_pre_covid.csv")
-
+fwrite(Pre_Cov_summary,"data//processed//FF_Pre_Covid_by_Stop.csv")
+                              
 
