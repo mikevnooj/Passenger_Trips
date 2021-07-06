@@ -1,3 +1,7 @@
+library(magrittr)
+library(data.table)
+library(dplyr)
+library(ggplot2)
 
 con_DW <- DBI::dbConnect(odbc::odbc(), Driver = "SQL Server", Server = "AVAILDWHP01VW", 
                          Database = "DW_IndyGo", Port = 1433)
@@ -10,12 +14,12 @@ DimServiceLevel <- tbl(con_DW,"DimServiceLevel") %>%
   data.table(key = "ServiceLevelKey")
 
 DimDate_start_post_cov_mpo <- tbl(con_DW, "DimDate") %>%
-  filter(CalendarDateChar == "09/01/2019") %>%
+  filter(CalendarDateChar == "01/01/2021") %>%
   collect() %>% 
   setDT(key = "DateKey")
 
 DimDate_end_pre_cov_mpo <- tbl(con_DW, "DimDate") %>%
-  filter(CalendarDateChar == "03/13/2020") %>%
+  filter(CalendarDateChar == "06/01/2021") %>%
   collect() %>% 
   setDT(key = "DateKey")
 
@@ -37,7 +41,7 @@ DimFare <- tbl(con_DW, "DimFare") %>%
 
 # get Routes
 DimRoute <- tbl(con_DW,"DimRoute") %>%
-  filter() %>%
+  filter(RouteReportLabel %in% c("90","901","37","10")) %>%
   collect() %>% 
   setDT(key = "RouteKey")
 
@@ -45,10 +49,11 @@ DimRoute <- tbl(con_DW,"DimRoute") %>%
 
 FactFare <- tbl(con_DW, "FactFare") %>%
   filter(
-    FareKey %in% c(1001, 1002),
-    DateKey >= local(DimDate_start_post_cov_mpo$DateKey),
-    DateKey <= local(DimDate_end_pre_cov_mpo$DateKey)
-  ) %>% #end filter
+    FareKey %in% c(1001, 1002, 1005)
+    , DateKey >= local(DimDate_start_post_cov_mpo$DateKey)
+    , DateKey <= local(DimDate_end_pre_cov_mpo$DateKey)
+    , RouteKey %in% local(DimRoute$RouteKey)
+    ) %>% #end filter
   collect() %>% 
   setDT()
 # Get Weekday only --------------------------------------------------------
@@ -123,13 +128,15 @@ FF_joined_zero <- FF_joined_daily[Boarding == 0 | Alighting == 0]
 FF_no_zero <- FactFare_joined_weekday[!FF_joined_zero,on = c(DateKey = "DateKey",VehicleKey = "VehicleKey")]
 
 #graph it and check
-FF_joined_daily[!FF_joined_zero,on = c(DateKey = "DateKey",VehicleKey = "VehicleKey")] %>%
+FF_joined_daily[!FF_joined_zero,on = c(DateKey = "DateKey",VehicleKey = "VehicleKey")][Wheelchair > 10] %>%
   ggplot(aes(x=Boarding)) +
   geom_histogram(binwidth = 1) +
   stat_bin(binwidth = 1, geom = "text"
            , aes(label = ..x..)
            , vjust = -1.5)
 
+
+FactFare_joined_weekday[FareReportLabel == "Boarding"][,.N,FareCount][order(FareCount)]
 #okay, 500 is a good bet i think
 obvious_outlier <- 500
 
@@ -191,15 +198,15 @@ DailyStop <- FF_clean[
   #remove garage and 0
   StopID != 0 & StopID < 99000
   ,sum(FareCount)
-  ,.(FareReportLabel,DateKey,StopID)
+  ,.(FareReportLabel,DateKey,StopID,RouteReportLabel)
   ]
 
 #get total boards for each stop
 # StopSums <- dcast(DailyStop[,sum(V1),.(StopID,FareReportLabel,RouteReportLabel)],
 #                   StopID + RouteReportLabel ~ FareReportLabel)
 
-StopSums <- dcast(DailyStop[,sum(V1),.(StopID,FareReportLabel)],
-                  StopID ~ FareReportLabel)
+StopSums <- dcast(DailyStop[,sum(V1),.(StopID,FareReportLabel,RouteReportLabel)],
+                  StopID + RouteReportLabel ~ FareReportLabel)
 
 # get average daily boarding and alighting -------------------------------
 
@@ -219,6 +226,6 @@ Pre_Cov_summary <- merge.data.table(StopSums,FactFareDateCount,"StopID",all.x = 
     ]
 #write this when you're back
 
-fwrite(Pre_Cov_summary,"data//processed//FF_Pre_Covid_by_Stop.csv")
+fwrite(Pre_Cov_summary,"data//processed//Stop_Activity_20210101_to_20210601.csv")
                               
 

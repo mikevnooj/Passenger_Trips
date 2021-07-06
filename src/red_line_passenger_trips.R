@@ -205,7 +205,7 @@ holidays_sunday_service <- c("USNewYearsDay", "USMemorialDay",
 holidays_saturday_service <- c("USMLKingsBirthday")
 
 #set sat sun
-holidays_sunday <- holiday(2000:2025, holidays_sunday_service)
+holidays_sunday <- holiday(2000:2050, holidays_sunday_service)
 holidays_saturday <- holiday(2000:2025, holidays_saturday_service)
 
 #set service type column
@@ -463,9 +463,13 @@ fwrite(apc_trips_data[Transit_Day < "2021-01-01"
 
 # get trips operated ------------------------------------------------------
 
-trips_operated_raw <- fread("data//raw//90_Trips_Operated_Raw.csv")
-
 trips_operated_raw <- fread("data//raw//90_Trips_Operated_202104.csv")
+
+trips_operated_raw_2 <- fread("data//raw//90_Trips_Operated_202105.csv")
+
+trips_operated_raw <- rbind(trips_operated_raw, trips_operated_raw_2)
+
+trips_operated_raw[order(Date)]
 
 trips_operated <- trips_operated_raw[`In-S` == "TRUE" & Cancelled == "FALSE"]
 
@@ -519,6 +523,7 @@ trips_operated_90[
   ][order(Inbound_Outbound)
     ]
 
+
 trips_operated_90[, c("time","aorp") := tstrsplit(trips_operated_90$Start,"[a,p,x,;]")]
 
 trips_operated_90[,aorp := fifelse(Start %like% "p"
@@ -527,7 +532,7 @@ trips_operated_90[,aorp := fifelse(Start %like% "p"
                                    )
                   ][, time := as.integer(time)
                     ][, time := fifelse(Start %like% "p" & time < 1200 | Start %like% "x"
-                                                             , time + 1200
+                                        , time + 1200
                                         , time
                                         , 0
                                         )
@@ -578,6 +583,8 @@ trips_operated_90[, trip_start_hour := data.table::hour(time)
                                                    )
                       ]
 
+trips_operated_90[,.N,Transit_Day][order(Transit_Day)]
+
 
 # begin the expansion -----------------------------------------------------
 
@@ -592,7 +599,7 @@ apc_trips_valid <- apc_trips_data[!apc_trips_data[Transit_Day <= "2020-01-31" &
                                                     Boards > 1000                                                   
                                                   ]
                                   , on = c("AdHocTripNumber")
-                                  #][Transit_Day >= "2021-01-01"
+                                  ][Transit_Day >= "2021-01-01"
                                     ][Inbound_Outbound != 9 &
                                         Inbound_Outbound != 14
                                       ][, trip_start_hour := fifelse(trip_start_hour == 4
@@ -651,7 +658,7 @@ expanded_operated_trips <- merge.data.table(trips_operated_per_stratum
 # function development ----------------------------------------------------
 
 
-month_end <- as.IDate("2021-01-31")
+month_end <- as.IDate("2021-04-31")
 
 month_number <- month(month_end)
 
@@ -758,7 +765,7 @@ fwrite(ytd_month_summary
 # second section function dev ---------------------------------------------
 
 
-month_end <- as.IDate("2021-04-30")
+month_end <- as.IDate("2021-05-31")
 
 month_number <- month(month_end)
 
@@ -829,6 +836,8 @@ expanded_operated_trips <- merge.data.table(trips_operated_per_stratum
 
 #get service table
 service_table <- trips_operated_90[Transit_Day <= month_end & Transit_Day > prev_month_end][,.(service_days_in_month = uniqueN(Transit_Day)),service_type]
+
+
 
 ytd_month_summary <- expanded_operated_trips[, .(boardings = sum(final_boardings))
                                          , service_type

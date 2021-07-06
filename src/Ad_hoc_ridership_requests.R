@@ -8834,10 +8834,6 @@ library(ggplot2)
 Stop_Ridership_col_names <- c("Stop Number", "Stop Name", "Total Boardings", "Average Daily Boardings","Total Alightings","Average Daily Alightings","Days")
 
 
-
-# do sep thru march for service planning ADA --------------------------
-
-
 # Import ------------------------------------------------------------------
 
 
